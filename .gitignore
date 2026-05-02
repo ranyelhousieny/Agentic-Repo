@@ -1,0 +1,23 @@
+# Local-only files
+.env
+.env.local
+.private/
+.private.backup/
+
+# Claude Code
+.claude/settings.local.json
+.claude.backup/
+
+# Cloned repositories (Git repos within Git repos)
+Cloned_Repos/
+Target_Repos/
+
+# Local-only generated artifacts
+Generated/
+
+# OS files
+.DS_Store
+*.swp
+*.swo
+Thumbs.db
+
