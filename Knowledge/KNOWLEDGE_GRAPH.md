@@ -2,7 +2,7 @@
 
 **Purpose:** Navigation map for all knowledge in this framework. AI agents use this to efficiently find information without guessing.
 
-**Last Updated:** April 8, 2026 (v1.3 - Enhanced convert-repo-to-agentic with skill, Jira sync, SME contacts, cross-workspace)
+**Last Updated:** June 10, 2026 (v1.4 - Registered converted repo: crewAI)
 **Maintainer:** Auto-updated by agents on significant changes
 
 ---
@@ -101,6 +101,12 @@ prompts/templates/
 | `.windsurf/workflows/convert-repo-to-agentic.md`       | Windsurf workflow           | High      |
 | `prompts/templates/AI Agents/REPO_ONBOARDING_AGENT.md` | Full agent for onboarding   | High      |
 | `Generated/Repos/*.md`                                 | Profiles of converted repos | Medium    |
+
+**Converted Repos Registry:**
+
+| Repo | Converted | Profile |
+|------|-----------|---------|
+| crewAI (github.com/crewAIInc/crewAI) | 2026-06-10 | `Generated/Repos/crewAI_PROFILE.md` — Python/uv workspace, local at `~/code/personal/crewAI`, domain agent `@crewai-agent` |
 
 **Key Questions:**
 
