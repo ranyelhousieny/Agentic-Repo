@@ -15,6 +15,16 @@ Target_Repos/
 # Local-only generated artifacts
 Generated/
 
+# Test-run byproducts.  verify_citations.sh writes VALIDATION_SUMMARY.md into CWD,
+# and under pytest that file embeds absolute tmp paths (which include the local
+# username).  Never commit it.
+VALIDATION_SUMMARY.md
+.pytest_cache/
+__pycache__/
+*.pyc
+venv*/
+.venv/
+
 # OS files
 .DS_Store
 *.swp

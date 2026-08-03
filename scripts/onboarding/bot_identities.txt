@@ -1,0 +1,48 @@
+# bot_identities.txt — Bot / CI identity deny-list for extract_git_ownership.sh
+#
+# One pattern per line. Lines starting with # are comments.
+# Patterns are matched case-insensitively against "Name <email>" strings
+# produced by `git shortlog`. Three matching modes:
+#
+#   EMAIL_GLOB  — a line containing '@' is treated as an email glob:
+#                 matched against the email portion of "Name <email>".
+#                 Shell-style globs (* matches any substring).
+#                 Examples:  *-sa@*            (service-account glob)
+#                             *@noreply.*
+#
+#   NAME_SUBSTR — a line NOT containing '@' and NOT starting with #
+#                 is matched as a case-insensitive substring of the
+#                 full "Name <email>" string.
+#                 Examples:  renovate
+#                             dependabot
+#                             gitlab-ci-token
+#
+# Processing is done in extract_git_ownership.sh via Python (fnmatch +
+# case-fold).  All bot rows are excluded from top_committers output AND
+# excluded from commit_count totals.
+#
+# ── Service accounts ─────────────────────────────────────────────────────────
+# Add your org's named service accounts here, one per line.
+*-sa@*
+service-account
+
+# ── Dependency-update bots ────────────────────────────────────────────────────
+renovate
+renovate[bot]
+dependabot
+dependabot[bot]
+
+# ── CI / automation identities ────────────────────────────────────────────────
+gitlab-ci-token
+github-actions[bot]
+github-actions
+
+# ── noreply / no-reply addresses ─────────────────────────────────────────────
+*@noreply.*
+*+noreply@*
+noreply
+
+# ── Generic automation patterns ───────────────────────────────────────────────
+[bot]
+-bot@
+bot@

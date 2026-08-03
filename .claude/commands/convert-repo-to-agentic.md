@@ -15,6 +15,7 @@ Transforms any repository into an AI-powered development environment with battle
 ```
 
 Examples:
+
 ```
 /project:convert-repo-to-agentic https://github.com/owner/my-service.git
 /project:convert-repo-to-agentic git@gitlab.com:group/my-service.git
@@ -54,10 +55,11 @@ Reads the full agent definition and executes it:
 ## What Gets Created
 
 Inside the target repo:
+
 - `CLAUDE.md` - AI rules tailored to the detected tech stack
 - `AGENTS.md` - Claude Code workspace instructions
 - `START_HERE.md` - Project entry point with repo-specific content
-- `Knowledge/KNOWLEDGE_GRAPH.md` - Navigation map
+- `Knowledge/KNOWLEDGE_GRAPH.md` - Navigation map (see Knowledge Graph Standard below)
 - `Knowledge/DOCUMENT_INDEX.md` - Topic-based lookup
 - `Knowledge/Source of Truth/PROJECT_VISION.md` - Template for team
 - `Generated/PROGRESS_TRACKER.md` - Session continuity
@@ -71,9 +73,23 @@ Inside the target repo:
 - `.claude/commands/analyze-repo.md`
 
 In this Agentic-Repos workspace:
+
 - `Generated/Repos/{repo-name}_PROFILE.md` - Repo registry entry
 
 **After conversion, start every session with:** `/project:{repo}-ai`
+
+## Knowledge Graph Standard (mandatory)
+
+Every generated `Knowledge/KNOWLEDGE_GRAPH.md` must contain all of these sections, matching the reference-quality bar:
+
+1. Document Hierarchy and Authority (Tiers 1-4, Source of Truth wins conflicts)
+2. Relationship Graph (Mermaid `graph TB` of tiers and major docs)
+3. Concept Clusters (file tables + Key Questions)
+4. Quick Reference: Common Questions (question to document)
+5. Evidence Tracing (Claim to source files)
+6. Search Index (Keyword to document)
+
+Plus a New Team Member Path and a Maintenance section (add/update/deprecate rules + Version History) so the map stays current. Canonical format: `.claude/agents/knowledge-builder.md` Step 3. A map missing the Relationship Graph, Evidence Tracing, or Maintenance is incomplete.
 
 ## Zero Hallucination Policy
 

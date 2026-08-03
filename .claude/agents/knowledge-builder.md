@@ -66,6 +66,14 @@ Create `$REPO_PATH/Knowledge/KNOWLEDGE_GRAPH.md` with:
 **Purpose:** Navigation map for all knowledge in this repository.
 **Last Updated:** {TODAY}
 **Framework:** Agentic-Repos v1.0
+**Maintainer:** Auto-updated by agents on significant changes
+
+---
+
+## How to Use This Knowledge Graph
+
+**For AI agents:** search by concept, follow authority tiers (higher wins), trace evidence to source files, discover prerequisites.
+**For developers:** start with the New Team Member Path, use Concept Clusters for deep dives.
 
 ---
 
@@ -82,6 +90,27 @@ Create `$REPO_PATH/Knowledge/KNOWLEDGE_GRAPH.md` with:
 
 ### Tier 4: Code and Configuration
 {Source code}
+
+---
+
+## Relationship Graph (Mermaid)
+
+```mermaid
+graph TB
+    subgraph T1["Tier 1: Source of Truth"]
+        SOT[PROJECT_VISION.md]
+    end
+    subgraph T2["Tier 2: Core Knowledge"]
+        KG[KNOWLEDGE_GRAPH.md]
+        DI[DOCUMENT_INDEX.md]
+    end
+    CLAUDE[CLAUDE.md] --> KG
+    SOT --> KG
+    KG --> DI
+    KG --> CC[Concept Clusters]
+    SOT -. wins conflicts .-> T2
+    %% add the detected major docs and their real relationships
+```
 
 ---
 
@@ -104,6 +133,27 @@ Create `$REPO_PATH/Knowledge/KNOWLEDGE_GRAPH.md` with:
 
 ---
 
+## Quick Reference: Common Questions
+
+| Question | Answer (document) |
+|----------|-------------------|
+| What is this project? | `START_HERE.md`, `Knowledge/Source of Truth/PROJECT_VISION.md` |
+| How do I run or build it? | `START_HERE.md` Quick Start |
+| {top repo-specific questions} | {file} |
+
+---
+
+## Evidence Tracing
+
+### Claim: "{a load-bearing factual claim about the repo}"
+**Evidence:**
+- `{source file 1}`
+- `{source file 2}`
+
+(One block per key claim. Every claim cites real files. Mark confidence if uncertain.)
+
+---
+
 ## Search Index
 
 | Keyword | Find It In |
@@ -119,6 +169,22 @@ Create `$REPO_PATH/Knowledge/KNOWLEDGE_GRAPH.md` with:
 3. `Knowledge/Source of Truth/PROJECT_VISION.md` - Goals (10 min)
 4. `README.md` - Technical overview (15 min)
 5. `/project:analyze-repo` - Deep analysis (30 min)
+
+---
+
+## Maintenance
+
+**Trigger:** update this map in the same change as any significant repo change. An out-of-date map is worse than none.
+
+- **Adding a doc:** add to the right Tier, a Concept Cluster, Evidence Tracing (if it backs a claim), the Search Index, and the Relationship Graph if major; bump Last Updated + version.
+- **Updating a doc:** update its cluster and Evidence Tracing entries; bump Last Updated.
+- **Deprecating a doc:** mark archived or superseded in the Tier list (keep it), point to its replacement, drop it from active clusters.
+
+### Version History
+
+| Date | Version | Change |
+|------|---------|--------|
+| {TODAY} | 1.0 | Initial knowledge graph |
 ```
 
 ### Step 4: Build the Document Index
@@ -167,12 +233,14 @@ When updating (not creating):
 1. Read the existing `Knowledge/KNOWLEDGE_GRAPH.md`
 2. Identify what changed (new files, meetings, decisions)
 3. Add new entries without removing existing ones
-4. Update the "Last Updated" timestamp
+4. Update the "Last Updated" timestamp and version note
 5. Add new keywords to the Search Index
+6. Update Evidence Tracing and the Relationship Graph if a major document changed
+7. Add a row to the Version History table
 
 ## OUTPUT FORMAT CHECKLIST
 
-- [ ] KNOWLEDGE_GRAPH.md created/updated with correct tiers
+- [ ] KNOWLEDGE_GRAPH.md created/updated with ALL required sections: Hierarchy (tiers), Relationship Graph (Mermaid), Concept Clusters, Quick Reference, Evidence Tracing, Search Index, New Team Member Path, Maintenance + Version History
 - [ ] DOCUMENT_INDEX.md created/updated with topic lookup
 - [ ] PROJECT_VISION.md template created (Source of Truth)
 - [ ] PROGRESS_TRACKER.md created/updated

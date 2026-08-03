@@ -2,7 +2,7 @@
 
 **Purpose:** Navigation map for all knowledge in this framework. AI agents use this to efficiently find information without guessing.
 
-**Last Updated:** June 10, 2026 (v1.4 - Registered converted repo: crewAI)
+**Last Updated:** July 25, 2026 (v1.5 - Added Relationship Graph (Mermaid) and Evidence Tracing sections)
 **Maintainer:** Auto-updated by agents on significant changes
 
 ---
@@ -70,6 +70,39 @@ prompts/templates/
 
 ---
 
+## Relationship Graph (Mermaid)
+
+```mermaid
+graph TB
+    subgraph T1["Tier 1: Source of Truth (READ ONLY)"]
+        AF[AGENTIC_FRAMEWORK.md]
+        PV[PROJECT_VISION.md]
+    end
+    subgraph T2["Tier 2: Framework Knowledge"]
+        KG[KNOWLEDGE_GRAPH.md]
+        DI[DOCUMENT_INDEX.md]
+    end
+    subgraph T3["Tier 3: Generated Artifacts"]
+        PT[PROGRESS_TRACKER.md]
+        RP[Generated/Repos]
+    end
+    subgraph T4["Tier 4: Templates and Prompts"]
+        ROA[REPO_ONBOARDING_AGENT.md]
+        DA[AGENTIC_REPOS_AI_AGENT.md]
+    end
+    CLAUDE[CLAUDE.md] --> KG
+    AF --> KG
+    KG --> DI
+    KG --> CC[Concept Clusters]
+    DA --> KG
+    ROA --> RP
+    KG --> PT
+    AF -. wins conflicts .-> T2
+    AF -. wins conflicts .-> T3
+```
+
+---
+
 ## Concept Clusters
 
 ### Cluster 1: Framework Core
@@ -104,8 +137,8 @@ prompts/templates/
 
 **Converted Repos Registry:**
 
-| Repo | Converted | Profile |
-|------|-----------|---------|
+| Repo                                 | Converted  | Profile                                                                                                                    |
+| ------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
 | crewAI (github.com/crewAIInc/crewAI) | 2026-06-10 | `Generated/Repos/crewAI_PROFILE.md` — Python/uv workspace, local at `~/code/personal/crewAI`, domain agent `@crewai-agent` |
 
 **Key Questions:**
@@ -178,6 +211,40 @@ prompts/templates/
 
 ---
 
+## Evidence Tracing
+
+### Claim: "Source of Truth is read-only and wins on conflict"
+
+**Evidence:**
+
+- `Knowledge/Source of Truth/AGENTIC_FRAMEWORK.md` (design principles)
+- `CLAUDE.md` Rule 8 (Knowledge Graph navigation), Rule 9 (Generated artifacts standard)
+- This file, Document Hierarchy section ("Source of Truth wins in conflicts")
+
+### Claim: "Every converted repo gets a domain agent as its session entry point"
+
+**Evidence:**
+
+- `prompts/templates/AI Agents/REPO_ONBOARDING_AGENT.md` Step 10.6 (domain agent skill generation)
+- `.claude/skills/agentic-repos-agent/SKILL.md` (domain skill for this framework)
+- `.claude/commands/convert-repo-to-agentic.md` ("What Gets Created")
+
+### Claim: "AI-generated artifacts are kept separate from authoritative knowledge"
+
+**Evidence:**
+
+- `CLAUDE.md` Rule 9 (Generated artifacts standard)
+- `Generated/` directory (PROGRESS_TRACKER.md, Repos/, session_logs/)
+
+### Claim: "crewAI was converted to an agentic repo on 2026-06-10"
+
+**Evidence:**
+
+- `Generated/Repos/crewAI_PROFILE.md`
+- This file, Cluster 2 Converted Repos Registry
+
+---
+
 ## Search Index
 
 | Keyword                | Find It In                                                                            |
@@ -226,9 +293,32 @@ Follow in order:
 
 ## Maintenance
 
-When adding a new document:
+**Trigger:** Update this Knowledge Graph in the same change as any significant repo change (new docs, architecture decisions, converted repos, meetings). An out-of-date map is worse than none.
 
-1. Add it to the correct Tier above
-2. Add to the relevant Concept Cluster
-3. Add keywords to the Search Index
-4. Update "Last Updated" timestamp
+### When adding a new document
+
+1. Add it to the correct Tier in Document Hierarchy
+2. Add it to the relevant Concept Cluster (or create one)
+3. Add a claim to Evidence Tracing if it backs a factual claim
+4. Add keywords to the Search Index
+5. Update the Relationship Graph if it is a major document
+6. Bump "Last Updated" and the version note
+
+### When updating an existing document
+
+1. Check whether its relationships or authority changed
+2. Update the affected cluster and Evidence Tracing entries
+3. Bump "Last Updated"
+
+### When deprecating a document
+
+1. Mark it archived or superseded in the Tier list (keep it, do not delete)
+2. Point to its replacement
+3. Remove it from active Concept Clusters, keep it in the graph for history
+
+### Version History
+
+| Date       | Version | Change                                                           |
+| ---------- | ------- | ---------------------------------------------------------------- |
+| 2026-06-10 | 1.4     | Registered converted repo: crewAI                                |
+| 2026-07-25 | 1.5     | Added Relationship Graph (Mermaid) and Evidence Tracing sections |
