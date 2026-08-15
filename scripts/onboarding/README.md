@@ -293,6 +293,28 @@ the contract, never load-bearing**:
 
 ---
 
+### `readiness_report.py` (scored agent-readiness report — local artifact only)
+
+Emits `Generated/READINESS_REPORT.md`: five gated levels (L1 Orientation, L2 Hygiene,
+L3 Instruction layer, L4 Knowledge layer, L5 Governed autonomy), pass >= 80% of a
+level's applicable criteria to unlock the next, levels unlock contiguously. Every
+criterion is a checkable filesystem fact with a remediation hint mapping to a framework
+motion — the converter IS the remediation for L3-L5.
+
+- **Mechanics lineage, honestly stated:** the gated-level scoring, difficulty axis
+  (Basic/Intermediate/Advanced) and report-then-fix loop are adapted from Factory's
+  Agent Readiness Model (docs.factory.ai/agent-readiness/overview, assessed 2026-08-14).
+  Deliberately NOT adopted: platform persistence (this report never leaves the machine),
+  the git `origin` requirement (a bare directory scores), and criteria without visible
+  evidence commands.
+- **N/A semantics:** a criterion may be not-applicable (excluded from the denominator).
+  The `code-graph` criterion applies only when the optional engine adapter ever ran —
+  a repo is never penalized for a tool it never used.
+- **Eager-load budget is measured, not assumed:** sums the byte size of
+  `CLAUDE.md`/`AGENTS.md`/`START_HERE*`/`Knowledge/CODE_INDEX.md` against a 100k-char cap.
+- Usage: `python3 scripts/onboarding/readiness_report.py <repo_path> [--stdout]`;
+  always exits 0; one-line JSON summary on stderr for pipelines.
+
 ### `extract_git_ownership.sh` (ownership extractor — different schema, v2)
 
 ```bash

@@ -304,6 +304,22 @@ Create `$REPO_PATH/CLAUDE.md` with:
 For Java/Spring:
 
 ````markdown
+### Final step: Agent readiness report (scored, local-only)
+
+```bash
+# Scored L1-L5 readiness report. Gated-level mechanics adapted from Factory's
+# Agent Readiness Model (docs.factory.ai/agent-readiness/overview); criteria and
+# level semantics are this framework's own. Every criterion is a checkable
+# filesystem fact — no LLM judgment, no network, no git remote, and the report
+# never leaves the machine (Generated/READINESS_REPORT.md).
+python3 scripts/onboarding/readiness_report.py "$REPO_PATH"
+```
+
+Report the achieved level (L0-L5) in the conversion summary. A converted repo should
+reach L4 (instruction + knowledge layers); L5 additionally needs eval assets and
+session continuity in use. Failing criteria carry remediation hints — the converter
+itself is the remediation for L3-L5.
+
 ## Tech Stack: Spring Boot
 
 ### Running Locally
