@@ -15,13 +15,14 @@ bash 3.2+, python3 3.9+
 ```
 
 Every `# Requires:` header in each `.sh` and `.py` file in this directory mirrors this
-floor verbatim.  Python 3.9 is the declared minimum because:
+floor verbatim. Python 3.9 is the declared minimum because:
+
 - It is the oldest interpreter known to be in active use on operator machines (verified:
   `/usr/bin/python3 -V` → `Python 3.9.6` on the minimum-interpreter target).
 - `dict |` merge (PEP 584) and `str.removeprefix`/`removesuffix` (PEP 616) require 3.9 —
   both are safe to use at or above the floor.
 - PEP 604 union-type annotations (`X | Y`) require **Python 3.10+** and are therefore
-  **forbidden** in this directory.  Use `typing.Optional[X]` instead (PEP 484).
+  **forbidden** in this directory. Use `typing.Optional[X]` instead (PEP 484).
 - Python 3.8 is not a supported target; no operator machine is known to run it.
 
 Bash 3.2 compatibility is already enforced — the `# Requires: bash 3.2+` note on
@@ -40,10 +41,11 @@ returned exactly one hit prior to this fix (`verify_citations.sh:311`), now reso
 This directory contains **two distinct families** of scripts with **different stdout schemas**.
 Do not mix them up.
 
-| Family | Scripts | Schema |
-|--------|---------|--------|
-| Code-symbol extractors | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol |
-| Ownership extractor | `extract_git_ownership.sh` | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
+| Family                                               | Scripts                                                                                      | Schema                                                                                    |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Code-symbol extractors                               | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol                                  |
+| Optional engine adapter (flag-gated, OFF by default) | `extract_graphify.py`                                                                        | Same `{path, line, kind, identifier}` contract + additive `{engine, confidence}` fields   |
+| Ownership extractor                                  | `extract_git_ownership.sh`                                                                   | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
 
 ---
 
@@ -56,23 +58,29 @@ Each line is one record:
 {"path":"<relative-path>","line":<int>,"kind":"<kind>","identifier":"<identifier>"}
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `path` | string | File path relative to `$REPO_PATH` |
-| `line` | integer | 1-based line number of the symbol |
-| `kind` | string | One of the values below |
-| `identifier` | string | Human-readable name / label |
+| Field        | Type    | Description                        |
+| ------------ | ------- | ---------------------------------- |
+| `path`       | string  | File path relative to `$REPO_PATH` |
+| `line`       | integer | 1-based line number of the symbol  |
+| `kind`       | string  | One of the values below            |
+| `identifier` | string  | Human-readable name / label        |
 
 ### `kind` values (code-symbol extractors only)
 
-| Kind | Meaning |
-|------|---------|
-| `module` | Top-level package, Maven module, or directory boundary |
-| `entry_point` | Application entry point (main class, `FastAPI()`, etc.) |
-| `endpoint` | HTTP/RPC endpoint or CLI command |
-| `config` | Config key or env-var (`@Value`, `process.env.KEY`, `var.name`) |
-| `integration` | External dependency / integration point |
-| `test_location` | Test file or test directory root |
+| Kind            | Meaning                                                                      |
+| --------------- | ---------------------------------------------------------------------------- |
+| `module`        | Top-level package, Maven module, or directory boundary                       |
+| `entry_point`   | Application entry point (main class, `FastAPI()`, etc.)                      |
+| `endpoint`      | HTTP/RPC endpoint or CLI command                                             |
+| `config`        | Config key or env-var (`@Value`, `process.env.KEY`, `var.name`)              |
+| `integration`   | External dependency / integration point                                      |
+| `test_location` | Test file or test directory root                                             |
+| `handler`       | Function/method symbol (optional Graphify adapter only)                      |
+| `dependency`    | Import/call edge, identifier `"src -> dst"` (optional Graphify adapter only) |
+
+**Additive fields:** the optional adapter appends `engine` (e.g. `graphifyy==0.9.43`) and
+`confidence` (`EXTRACTED`) to each record. Consumers of the contract MUST ignore unknown
+fields — the four base fields are the contract; everything else is provenance.
 
 **Fail-closed guarantee:** an extractor that cannot produce a `path:line` citation
 MUST drop the entry silently (never emit an entry with empty `path` or `line <= 0`).
@@ -103,18 +111,18 @@ never produce invalid JSON or cause `printf` format-specifier injection.
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `area` | string | Top-level directory name (e.g. `"src"`, `"tests"`, `"."` for root) |
-| `original_architect` | string or null | All-time most-active committer in the area (bot-filtered) |
-| `current_maintainer` | string or null | Most recent committer in the window (bot-filtered) |
-| `codeowners_entry` | string or null | Matching CODEOWNERS entry for this area (null if no CODEOWNERS file) |
-| `catalog_info_owner` | string or null | `spec.owner` from `catalog-info.yaml` (null if not present) |
-| `agreement` | string | `AGREE` — git and static sources match; `CONFLICTING` — they disagree; `SINGLE_SOURCE` — only git history available |
-| `derivation_date` | string | ISO-8601 date the record was derived |
-| `top_committers` | array of strings | Up to 3 most-active human committers in the window, `"Name <email>"` format |
-| `last_touched_date` | string | ISO-8601 date of the most recent commit in the window |
-| `commit_count` | integer | Total **human** (bot-filtered) commits in the window for this area |
+| Field                | Type             | Description                                                                                                         |
+| -------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `area`               | string           | Top-level directory name (e.g. `"src"`, `"tests"`, `"."` for root)                                                  |
+| `original_architect` | string or null   | All-time most-active committer in the area (bot-filtered)                                                           |
+| `current_maintainer` | string or null   | Most recent committer in the window (bot-filtered)                                                                  |
+| `codeowners_entry`   | string or null   | Matching CODEOWNERS entry for this area (null if no CODEOWNERS file)                                                |
+| `catalog_info_owner` | string or null   | `spec.owner` from `catalog-info.yaml` (null if not present)                                                         |
+| `agreement`          | string           | `AGREE` — git and static sources match; `CONFLICTING` — they disagree; `SINGLE_SOURCE` — only git history available |
+| `derivation_date`    | string           | ISO-8601 date the record was derived                                                                                |
+| `top_committers`     | array of strings | Up to 3 most-active human committers in the window, `"Name <email>"` format                                         |
+| `last_touched_date`  | string           | ISO-8601 date of the most recent commit in the window                                                               |
+| `commit_count`       | integer          | Total **human** (bot-filtered) commits in the window for this area                                                  |
 
 **Bot filtering:** Reads `scripts/onboarding/bot_identities.txt`. Bots are excluded from
 `top_committers`, `original_architect`, `current_maintainer`, and `commit_count`. Areas
@@ -200,6 +208,40 @@ Test locations: `.tftest.hcl` and Terratest `*_test.go` files.
 
 ---
 
+### `extract_graphify.py` (optional engine adapter — flag-gated, OFF by default)
+
+```bash
+GRAPHIFY_ADAPTER=1 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>
+```
+
+Runs the `graphifyy` code-graph pass (deterministic tree-sitter AST — no LLM, no network)
+and maps its `graph.json` into the code-symbol contract. The engine is a **tenant behind
+the contract, never load-bearing**:
+
+- **Flag-gated:** without `GRAPHIFY_ADAPTER=1` it skips cleanly (exit 0, zero records).
+  Removal drill: unset the flag and the framework degrades to the extractors above.
+- **Preflight:** requires `graphifyy >= 0.9.24` installed (`pip install 'graphifyy==0.9.43'`,
+  note the double `y`); absent or too old → clean skip with a loud stderr note.
+- **Zero-egress guarantee:** the engine subprocess runs with a sanitized environment —
+  every provider prefix (`OPENAI_`, `ANTHROPIC_`, `AWS_`, ...) and every `*_API_KEY`,
+  `*_BASE_URL`, `*_TOKEN`, `*_SECRET` variable is stripped, so the LLM/semantic pass
+  cannot authenticate anywhere. Code pass only, by construction.
+- **Confidence gate:** `EXTRACTED` records emit; `INFERRED` records are quarantined to
+  `Generated/graphify/NEEDS_VERIFICATION.jsonl` (never the index); `AMBIGUOUS` is dropped
+  and counted. Unknown node kinds are counted on stderr, never emitted.
+- **Engine output** stays in `$REPO_PATH/Generated/graphify/` (machine-local tier) —
+  the engine-native `graphify-out/` directory is relocated there after the run.
+- **Code-only invocation:** the adapter calls the engine's `update` subcommand
+  ("re-extract code files and update the graph (no LLM needed)" per the engine help)
+  with `--no-cluster`. The LLM-dependent paths (`extract`, community labeling) are
+  never invoked.
+- Env knobs: `GRAPHIFY_CMD` (default: the adapter's own interpreter `-m graphify` —
+  install graphifyy into the interpreter that runs the adapter, or point this at the
+  right one), `GRAPHIFY_SUBCOMMAND` (default `update`), `GRAPHIFY_ARGS` (default
+  `--no-cluster`), `GRAPHIFY_TIMEOUT` (default 900s).
+
+---
+
 ### `extract_git_ownership.sh` (ownership extractor — different schema, v2)
 
 ```bash
@@ -235,6 +277,7 @@ person (true total: 19). The canonical display name for the output record is the
 name seen for that email address.
 
 **Agreement semantics:**
+
 - `AGREE` — git-derived owner and at least one static source (CODEOWNERS/catalog-info) match.
 - `CONFLICTING` — at least one static source present but disagrees with git history.
 - `SINGLE_SOURCE` — only git history available (no CODEOWNERS, no catalog-info spec.owner).
@@ -265,8 +308,8 @@ service-account globs.
 bash scripts/onboarding/verify_citations.sh <ARTIFACT_FILE> [REPO_PATH] [OPTIONS]
 ```
 
-`REPO_PATH` is optional.  If omitted — or if the next argument starts with `--` — CWD
-is used as the repo root.  All three invocation forms work:
+`REPO_PATH` is optional. If omitted — or if the next argument starts with `--` — CWD
+is used as the repo root. All three invocation forms work:
 
 ```bash
 bash verify_citations.sh artifact.md --dry-run             # REPO_PATH defaults to CWD
@@ -275,6 +318,7 @@ bash verify_citations.sh artifact.md --repo-path /repo     # named --repo-path f
 ```
 
 **Claim derivation:**
+
 - For table rows (`| Field | Value | Evidence | Status |`): claim = Field + Value cells only
   (never from the full row, which would include the citation path and create self-referential overlap).
 - For standalone `**SOURCE:** path:line` lines: claim = nearest preceding non-citation line.
@@ -296,11 +340,13 @@ for reproducible gates. Default (no `--sha`) reads the working tree.
 
 **Path-token guards** prevent false-positives on version strings in prose
 (e.g. `Phase 1.5.2:100` or `v2.0:5`):
+
 - Bare integers (`12:34`) are skipped.
 - Version-like tokens matching `/^v?\d+\.\d+(\.\d+)*$/` are skipped.
 - Tokens with neither `/` nor a known file extension are skipped.
 
 Options:
+
 - `--threshold N` — minimum overlap score in **(0, 1]** (default: 0.10). 0 and >1 rejected.
 - `--dry-run` — print results to stdout; do NOT write `VALIDATION_SUMMARY.md`
 - `--summary-path P` — path for `VALIDATION_SUMMARY.md` (default: alongside artifact)
@@ -309,6 +355,7 @@ Options:
 - `--min-citations N` — minimum expected citations (default: 1 for citation-bearing names)
 
 **Exit codes:**
+
 - `0` — all citations resolved; citation count ≥ minimum
 - `1` — citation failure, missing file, or zero citations in citation-bearing artifact
 
@@ -368,6 +415,7 @@ python3 -m pytest scripts/onboarding/tests/ -v
 ```
 
 Each test builds a minimal in-memory fixture repo using `tmp_path` and validates:
+
 - Extractor output parses as valid JSON-lines.
 - Every record has a non-empty `path`, `line > 0`, non-empty `kind` and `identifier`.
 - Expected `kind` values appear for the given fixture.

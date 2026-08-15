@@ -220,6 +220,56 @@ This enables the domain agent's optional Jira sync capability.
 
 ---
 
+### Phase 1.5: Code Index Extraction
+
+**Step 5.8: Run extractors and materialise `Knowledge/CODE_INDEX.md`**
+
+Dispatch on `$FRAMEWORK` to run the matching code-symbol extractor(s) from
+`scripts/onboarding/` (contract documented in `scripts/onboarding/README.md`), collect the
+JSON-lines records they emit, and materialise `$REPO_PATH/Knowledge/CODE_INDEX.md` as a
+`Field|Value|Evidence|Status` table — one row per record where Evidence = `path:line`.
+
+```bash
+mkdir -p "$REPO_PATH/Knowledge"
+EXTRACTOR_OUT_FILE="$(mktemp)"
+
+case "$FRAMEWORK" in
+  "Spring Boot"|"JAX-RS")
+    bash scripts/onboarding/extract_spring_boot.sh "$REPO_PATH" > "$EXTRACTOR_OUT_FILE" 2>/dev/null || true ;;
+  "FastAPI"|"Flask"|"Django"|"Python")
+    python3 scripts/onboarding/extract_fastapi.py "$REPO_PATH" > "$EXTRACTOR_OUT_FILE" 2>/dev/null || true ;;
+  "Express + TypeScript"|"NestJS")
+    bash scripts/onboarding/extract_express.sh "$REPO_PATH" > "$EXTRACTOR_OUT_FILE" 2>/dev/null || true ;;
+  "Terraform")
+    bash scripts/onboarding/extract_terraform.sh "$REPO_PATH" > "$EXTRACTOR_OUT_FILE" 2>/dev/null || true ;;
+  *)  # Unknown framework — try all extractors and merge output
+    for X in extract_spring_boot.sh extract_express.sh extract_terraform.sh; do
+      bash "scripts/onboarding/$X" "$REPO_PATH" >> "$EXTRACTOR_OUT_FILE" 2>/dev/null || true
+    done
+    python3 scripts/onboarding/extract_fastapi.py "$REPO_PATH" >> "$EXTRACTOR_OUT_FILE" 2>/dev/null || true ;;
+esac
+
+# Always run the git-ownership extractor (different schema, feeds SME_CONTACTS)
+bash scripts/onboarding/extract_git_ownership.sh "$REPO_PATH" \
+  > "$REPO_PATH/Generated/Analysis/OWNERSHIP_RAW.jsonl" 2>/dev/null || true
+
+# OPTIONAL supplemental engine — Graphify adapter (OFF by default; enable with
+# GRAPHIFY_ADAPTER=1). Deterministic tree-sitter code-graph pass, zero egress by
+# construction (the adapter strips all credential env vars from the engine
+# subprocess). Emits the same JSON-lines contract (+ additive engine/confidence
+# fields) so the merge below consumes it unchanged. INFERRED-confidence records
+# are quarantined to Generated/graphify/NEEDS_VERIFICATION.jsonl, never the index.
+# Removal drill: unset the flag and this line is a no-op.
+python3 scripts/onboarding/extract_graphify.py "$REPO_PATH" >> "$EXTRACTOR_OUT_FILE" 2>/dev/null || true
+```
+
+Build `Knowledge/CODE_INDEX.md` from the collected records: group by `kind`, one row per
+record, `Evidence` column = `path:line`, `Status` = VERIFIED (records are emitted only with
+a real citation — the extractors are fail-closed). Records from the optional adapter carry
+additive `engine` and `confidence` fields; keep them in the row's Value column as provenance.
+
+---
+
 ### Phase 2: Generate Artifacts
 
 **CRITICAL: Actually create each file. Do NOT just describe what to create.**
@@ -314,6 +364,7 @@ npm run test:watch
 **Step 7: Create AGENTS.md**
 
 Create `$REPO_PATH/AGENTS.md` with:
+
 ```markdown
 # $REPO_NAME - Claude Code Workspace Instructions
 
@@ -323,14 +374,17 @@ Before doing ANY work in this workspace, read:
 `START_HERE.md`
 
 ## Agent Architecture
+
 - Source prompts: `prompts/templates/AI Agents/`
 - Native agents: `.claude/agents/`
 - Commands: `.claude/commands/`
 
 ## Knowledge Navigation
+
 `Knowledge/KNOWLEDGE_GRAPH.md`
 
 ## Zero Hallucination Policy
+
 See `CLAUDE.md` for full rules.
 ```
 
@@ -645,8 +699,7 @@ Next Priorities:
 1. [from progress tracker]
 2. [from progress tracker]
 
-How can I help?
-========================================
+# How can I help?
 
 ## Session End Protocol
 
@@ -728,8 +781,7 @@ and history. Your mission is to:
 ### Step 0: Get Today's Date
 
 ` ``bash
-date '+%A, %B %d, %Y %H:%M %Z'
-` ``
+date '+%A, %B %d, %Y %H:%M %Z' ` ``
 
 ### Step 1: Project Entry Point
 
@@ -755,8 +807,7 @@ If `$JIRA_PROJECT` is known (check START_HERE.md or PROGRESS_TRACKER.md):
 ` ``bash
 source /path/to/.env && \
 curl -s -u "$WIKI_EMAIL:$WIKI_API_TOKEN" \
-  "https://your-domain.atlassian.net/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+sprint+in+openSprints()+ORDER+BY+rank+ASC&maxResults=50"
-` ``
+  "https://your-domain.atlassian.net/rest/api/3/search?jql=project=$JIRA_PROJECT+AND+sprint+in+openSprints()+ORDER+BY+rank+ASC&maxResults=50" ` ``
 
 **b) Compare against existing status:**
 Read `Generated/SPRINT_STATUS.md` if exists. If no changes, report "JIRA synced — no changes".
@@ -768,8 +819,8 @@ If no JIRA project configured, skip this step silently.
 
 ### Step 6: Present Welcome Message
 
-` ``
-========================================
+# ` ``
+
 $REPO_NAME AI Agent
 [Current Date]
 ========================================
@@ -787,8 +838,8 @@ Next Priorities:
 1. [from progress tracker]
 2. [from progress tracker]
 
-How can I help?
-========================================
+# How can I help?
+
 ` ``
 
 ---
