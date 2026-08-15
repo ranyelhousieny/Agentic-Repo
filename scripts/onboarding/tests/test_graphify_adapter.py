@@ -544,3 +544,101 @@ def test_malformed_env_config_skips_cleanly(tmp_path, env, needle):
     assert result.stdout == ""
     assert "Traceback" not in result.stderr
     assert needle in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Independent test-report fixes (2026-08-15): vendor exclusion, leading-dot
+# identifiers, engine Python floor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path,expected", [
+    ("src/main/webapp/swagger-ui/swagger-ui.js", True),
+    ("node_modules/lodash/index.js", True),
+    ("web/static/app.min.js", True),
+    ("web/static/swagger-ui-bundle.js", True),
+    ("target/classes/Foo.java", True),
+    ("build/generated/Bar.kt", True),
+    (".venv/lib/site-packages/x.py", True),
+    ("src/main/java/App.java", False),
+    ("distribution/notes.md", False),      # `dist` must match whole segments only
+    ("outline/models.py", False),          # `out` must match whole segments only
+    ("src/builders/factory.py", False),    # `build` must not match substrings
+])
+def test_vendor_re_matches_segments_not_substrings(path, expected):
+    assert adapter.is_vendored(path) is expected
+
+
+def test_vendored_node_records_excluded_and_counted():
+    nodes = [
+        {"id": "a", "label": "AuthorizeBtn()", "_callable": True,
+         "source_file": "src/main/webapp/swagger-ui/swagger-ui.js",
+         "source_location": "L8", "confidence": "EXTRACTED"},
+        {"id": "b", "label": "realHandler()", "_callable": True,
+         "source_file": "src/service/Real.java",
+         "source_location": "L10", "confidence": "EXTRACTED"},
+    ]
+    counters = {"nodes_unparseable": 0, "nodes_missing_fields": 0,
+                "inferred_to_sidecar": 0, "ambiguous_dropped": 0}
+    records, sidecar = adapter.map_nodes(nodes, Path("/repo"), "graphifyy==test", counters)
+    assert [r["path"] for r in records] == ["src/service/Real.java"]
+    assert counters["vendor_excluded"] == 1
+    assert not sidecar
+
+
+def test_vendored_edge_records_excluded_and_counted():
+    counters = {"edges_unparseable": 0, "edges_non_dependency": 0,
+                "edges_unresolvable": 0, "inferred_to_sidecar": 0,
+                "ambiguous_dropped": 0, "node_index": {}}
+    edges = [
+        {"source": "x", "target": "y", "relation": "imports",
+         "source_file": "node_modules/left-pad/index.js", "source_location": "L1",
+         "confidence": "EXTRACTED"},
+        {"source": "m", "target": "n", "relation": "imports",
+         "source_file": "src/app.py", "source_location": "L3",
+         "confidence": "EXTRACTED"},
+    ]
+    records, _ = adapter.map_edges(edges, counters, "graphifyy==test", Path("/repo"))
+    assert [r["path"] for r in records] == ["src/app.py"]
+    assert counters["vendor_excluded"] == 1
+
+
+def test_leading_dots_stripped_from_identifiers():
+    """graphifyy labels methods `.main()`; the human-facing column must not show the dot."""
+    nodes = [{"id": "a", "label": ".main()", "_callable": True,
+              "source_file": "src/app.py", "source_location": "L5",
+              "confidence": "EXTRACTED"}]
+    counters = {"nodes_unparseable": 0, "nodes_missing_fields": 0,
+                "inferred_to_sidecar": 0, "ambiguous_dropped": 0}
+    records, _ = adapter.map_nodes(nodes, Path("/repo"), "graphifyy==test", counters)
+    assert records[0]["identifier"] == "main()"
+
+    edge_counters = {"edges_unparseable": 0, "edges_non_dependency": 0,
+                     "edges_unresolvable": 0, "inferred_to_sidecar": 0,
+                     "ambiguous_dropped": 0,
+                     "node_index": {"a": {"name": ".caller()", "path": "src/app.py",
+                                          "line": 5, "confidence": "EXTRACTED"},
+                                    "b": {"name": ".callee()", "path": "src/lib.py",
+                                          "line": 9, "confidence": "EXTRACTED"}}}
+    edges = [{"source": "a", "target": "b", "relation": "calls",
+              "source_file": "src/app.py", "source_location": "L6",
+              "confidence": "EXTRACTED"}]
+    records, _ = adapter.map_edges(edges, edge_counters, "graphifyy==test", Path("/repo"))
+    assert records[0]["identifier"] == "caller() -> callee()"
+
+
+def test_python_floor_skips_cleanly_with_actionable_message(tmp_path, monkeypatch, capsys):
+    """Under a pre-3.10 interpreter the packaged path must state the floor and skip —
+    not surface pip's 200-line version-skew noise that never names the problem."""
+    (tmp_path / "app.py").write_text("x = 1\n")
+    monkeypatch.setattr(adapter.sys, "version_info", (3, 9, 6))
+    monkeypatch.setattr(adapter.sys, "argv", ["extract_graphify.py", str(tmp_path)])
+    for var in ("GRAPHIFY_CMD", "GRAPHIFY_ALLOW_CMD_OVERRIDE", "GRAPHIFY_SKIP_PREFLIGHT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GRAPHIFY_ADAPTER", "1")
+    rc = adapter.main()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out == ""                      # no records emitted
+    assert ">= 3.10" in captured.err               # the floor is stated
+    assert "3.9" in captured.err                   # the running version is named
+    assert "graphifyy==0.9.43" in captured.err     # the remediation actually works

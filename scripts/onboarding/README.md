@@ -227,12 +227,16 @@ the contract, never load-bearing**:
   `GRAPHIFY_ADAPTER=disabled` and any typo stop the engine rather than silently running it.
   Removal drill: set the kill switch or uninstall the engine, and the framework degrades to
   the extractors above.
-- **Preflight:** requires `graphifyy >= 0.9.24` installed (`pip install 'graphifyy==0.9.43'`,
-  note the double `y`); absent or too old → clean skip with a loud stderr note. The floor is
-  a known-good schema baseline, not a pin — the mapper is verified against `0.9.43` and
-  tolerates additive drift. When a `GRAPHIFY_CMD` override is honoured (see the env knobs
-  below) the operator has named their own engine, so the distribution floor is skipped and
-  provenance is stamped from `GRAPHIFY_ENGINE_ID` (default `graphifyy==unknown`).
+- **Preflight:** requires Python **>= 3.10** for the engine (the adapter itself runs on 3.9,
+  but it invokes the engine in its own interpreter — under an older Python it states the
+  floor and skips cleanly instead of surfacing pip's version-skew noise) and
+  `graphifyy >= 0.9.24` installed (`python3.13 -m pip install 'graphifyy==0.9.43'`, note the
+  double `y`; any 3.10+ interpreter works); absent or too old → clean skip with a loud
+  stderr note. The version floor is a known-good schema baseline, not a pin — the mapper is
+  verified against `0.9.43` and tolerates additive drift. When a `GRAPHIFY_CMD` override is
+  honoured (see the env knobs below) the operator has named their own engine, so the
+  distribution floor is skipped and provenance is stamped from `GRAPHIFY_ENGINE_ID`
+  (default `graphifyy==unknown`).
 - **Code-only invocation — this is the egress guarantee.** The adapter calls only the
   engine's `update` subcommand ("re-extract code files and update the graph (no LLM
   needed)" per the engine help) with `--no-cluster`. The LLM-dependent paths (`extract`,
@@ -248,13 +252,20 @@ the contract, never load-bearing**:
   credentials the engine could read from files under `$HOME` (`~/.aws/credentials`,
   `~/.netrc`, `~/.config/gh/hosts.yml`), and it is not a network sandbox — which is why
   the code-only invocation above is what the safety posture actually rests on.
-- **Confidence gate:** `EXTRACTED` records emit; `INFERRED` records are quarantined to
+- **Confidence gate — honest scope: it applies to edges on current engine output.**
+  `EXTRACTED` records emit; `INFERRED` records are quarantined to
   `Generated/graphify/NEEDS_VERIFICATION.jsonl` (never the index); `AMBIGUOUS` is dropped
   and counted. A dependency edge inherits the WEAKEST confidence among itself and both
   endpoint nodes — an edge touching a quarantined node is quarantined, one touching a
-  dropped node is dropped. Records arriving with no `confidence` field are treated as
-  `EXTRACTED`, counted separately, and reported with a `WARNING` so engine schema drift
-  is visible. Unknown node kinds are counted on stderr, never emitted.
+  dropped node is dropped. Measured fact (`graphifyy==0.9.43`, every repo tested): **node
+  records carry no `confidence` field at all**, so they default to `EXTRACTED`, are counted
+  (`confidence_absent`), and trip a loud `WARNING` — for nodes the gate is a schema-drift
+  detector today, not a filter. Unknown node kinds are counted on stderr, never emitted.
+- **Vendored/generated/minified code is excluded before emission** (`node_modules/`,
+  `vendor/`, `dist/`, `build/`, `target/`, `*.min.js`, `*-bundle.js`, `swagger-ui/`,
+  virtualenvs, ...), counted and reported as `vendor_excluded`. Rationale: minified bundles
+  have no meaningful lines to cite, and on one real service 827 of 3,969 records (20.8%)
+  described Swagger's internals rather than the service.
 - **Fail-closed on citations:** a node or edge whose line number cannot be resolved is
   dropped and counted, never emitted with a fabricated `line: 1`.
 - **Stale-output safety:** the engine output directory is cleared before each run, and a

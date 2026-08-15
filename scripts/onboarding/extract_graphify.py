@@ -59,15 +59,25 @@ Safety guarantees:
      git-ignores that path, so the adapter writes Generated/graphify/.gitignore itself to
      keep engine output out of the target repo's history. Contract records go to stdout;
      INFERRED-confidence records go to the NEEDS_VERIFICATION.jsonl sidecar, never the
-     index; AMBIGUOUS is dropped and counted.
+     index; AMBIGUOUS is dropped and counted. Honest scope: on graphifyy==0.9.43 output,
+     NODE records carry no confidence field at all (measured: 100% absent on every repo
+     tested), so in practice the gate filters edges; absent-confidence records default to
+     EXTRACTED, are counted, and trip a loud WARNING — see confidence_of().
   3. FAIL-CLOSED CITATIONS. A node or edge whose line cannot be resolved is dropped and
      counted, never emitted with a fabricated line 1 (README.md "Fail-closed guarantee").
+     VENDORED/GENERATED/MINIFIED paths (node_modules, dist, build, target, *.min.js,
+     swagger-ui bundles, ...) are filtered before emission and counted as vendor_excluded:
+     minified bundles have no meaningful lines to cite, and one-in-five records on a real
+     service described Swagger's internals rather than the service before this filter.
   4. NO STALE REPUBLISHING. The engine output directory is cleared before each run and a
      non-zero engine exit emits nothing, so a failed run cannot re-emit the previous
      run's symbols.
   5. Requires graphifyy >= MIN_VERSION when using the packaged engine. The floor is a
      known-good baseline for the graph schema this adapter maps; it is NOT about base-URL
-     overrides, since guarantee 1 strips every *_BASE_URL variable anyway.
+     overrides, since guarantee 1 strips every *_BASE_URL variable anyway. The engine
+     also requires Python >= 3.10 and runs in THIS interpreter: under an older Python the
+     adapter states the floor and skips cleanly instead of surfacing pip's version-skew
+     noise (the adapter itself stays 3.9-compatible per the directory convention).
   6. Always exits 0 (Phase 1.5 convention); all diagnostics go to stderr. Malformed
      values for the env knobs above are reported and skipped, never raised.
 
@@ -88,7 +98,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 MIN_VERSION = (0, 9, 24)
-PIN_HINT = "python3 -m pip install 'graphifyy==0.9.43'"
+# The engine requires Python >= 3.10 (this adapter itself runs on 3.9). The hint names a
+# concrete modern interpreter because `python3 -m pip install` on a stock macOS box is
+# Python 3.9 and fails with 200 lines of version-skew noise that never states the floor.
+ENGINE_PY_FLOOR = (3, 10)
+PIN_HINT = ("python3.13 -m pip install 'graphifyy==0.9.43'  "
+            "(any Python >= 3.10 interpreter; the engine runs in the SAME interpreter "
+            "as this adapter)")
 
 CREDENTIAL_PREFIXES = (
     "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "MOONSHOT_", "DEEPSEEK_",
@@ -123,6 +139,22 @@ DEPENDENCY_EDGE_TYPES = {"import", "imports", "imports_from", "call", "calls",
                          "depends", "depends_on", "dependency", "uses", "references"}
 # graphifyy structural relations that are NOT dependencies (counted, never emitted):
 # contains, method, rationale_for
+
+# Vendored / generated / minified code is not the team's code and minified bundles have
+# no meaningful lines to cite (independent test: 827 of 3,969 records — 20.8% — on one
+# service came from three swagger-ui bundles, with symbols cited at a comment banner).
+# Filtered BEFORE emission and counted as vendor_excluded so the number is visible.
+VENDOR_RE = re.compile(
+    r"(^|/)(node_modules|vendor|third_party|thirdparty|dist|build|target|out"
+    r"|\.venv|venv|site-packages|__pycache__|\.gradle|\.m2|bower_components)(/|$)"
+    r"|\.min\.(js|css)$|-bundle\.js$|\.bundle\.js$|(^|/)swagger-ui(/|$)",
+    re.IGNORECASE,
+)
+
+
+def is_vendored(path: str) -> bool:
+    """True for paths the target team did not write (vendored/generated/minified)."""
+    return bool(VENDOR_RE.search(path))
 
 
 def log(msg: str) -> None:
@@ -318,8 +350,13 @@ def map_nodes(nodes: list, repo_path: Path, engine: str, counters: dict) -> tupl
         if located is None:
             continue
         path, line = located
+        if is_vendored(path):
+            counters["vendor_excluded"] = counters.get("vendor_excluded", 0) + 1
+            continue
+        # graphifyy labels methods with a leading dot (`.main()`); identifier is the
+        # human-facing column in CODE_INDEX.md, so strip it at the mapping site.
         record = {"path": path, "line": line,
-                  "kind": kind, "identifier": str(name),
+                  "kind": kind, "identifier": str(name).lstrip("."),
                   "engine": engine, "confidence": confidence_of(node, counters)}
         _route(record, records, sidecar, counters)
     counters["node_index"] = node_index
@@ -365,12 +402,15 @@ def map_edges(edges: list, counters: dict, engine: str,
         if not path or line is None or not src_name or not dst_name:
             counters["edges_unresolvable"] += 1
             continue
+        if is_vendored(path):
+            counters["vendor_excluded"] = counters.get("vendor_excluded", 0) + 1
+            continue
         # The edge inherits the weakest confidence among itself and both endpoints.
         conf = weakest_confidence(confidence_of(edge, counters),
                                   src.get("confidence", "EXTRACTED"),
                                   dst.get("confidence", "EXTRACTED"))
         record = {"path": path, "line": line, "kind": "dependency",
-                  "identifier": f"{src_name} -> {dst_name}",
+                  "identifier": f"{str(src_name).lstrip('.')} -> {str(dst_name).lstrip('.')}",
                   "engine": engine, "confidence": conf}
         _route(record, records, sidecar, counters)
     return records, sidecar
@@ -508,6 +548,15 @@ def main() -> int:
                   else "GRAPHIFY_SKIP_PREFLIGHT=1 (test seam)")
         log(f"packaged version floor skipped — {reason}; provenance stamped as {engine}")
     else:
+        # The engine needs Python >= 3.10 and runs in THIS interpreter (sys.executable).
+        # On a stock macOS box `python3` is 3.9.6 and the pip failure it produces never
+        # states the floor — so state it here and skip cleanly, before the version check.
+        if sys.version_info < ENGINE_PY_FLOOR:
+            log(f"graphifyy requires Python >= 3.10; this adapter is running under "
+                f"{sys.version_info[0]}.{sys.version_info[1]} ({sys.executable}) "
+                f"and invokes the engine in its own interpreter. Re-run Phase 1.5 under "
+                f"a 3.10+ interpreter, or install the engine into one: {PIN_HINT}")
+            return 0
         ver = engine_version()
         if ver is None:
             log(f"graphifyy is not installed — skipping cleanly. To enable: {PIN_HINT}")
@@ -546,7 +595,8 @@ def main() -> int:
     counters = {"nodes_unparseable": 0, "nodes_missing_fields": 0,
                 "inferred_to_sidecar": 0, "ambiguous_dropped": 0,
                 "edges_unparseable": 0, "edges_non_dependency": 0,
-                "edges_unresolvable": 0, "confidence_absent": 0}
+                "edges_unresolvable": 0, "confidence_absent": 0,
+                "vendor_excluded": 0}
     node_records, node_sidecar = map_nodes(nodes, repo_path, engine, counters)
     edge_records, edge_sidecar = map_edges(edges, counters, engine, repo_path)
     counters.pop("node_index", None)
@@ -560,6 +610,9 @@ def main() -> int:
     if dropped:
         log(f"fail-closed: {dropped} record(s) dropped for want of a resolvable "
             f"path:line citation (never emitted at a fabricated line 1)")
+    if counters["vendor_excluded"]:
+        log(f"vendor_excluded={counters['vendor_excluded']} record(s) from vendored/"
+            f"generated/minified paths filtered before emission (not the team's code)")
 
     # Symbol records go to stdout (Phase 1.5 merges them into Knowledge/CODE_INDEX.md,
     # which is eager-loaded at session start). Dependency edges do NOT: at real-repo
