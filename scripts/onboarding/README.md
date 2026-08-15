@@ -76,7 +76,7 @@ Each line is one record:
 | `integration`   | External dependency / integration point                                      |
 | `test_location` | Test file or test directory root                                             |
 | `handler`       | Function/method symbol (optional Graphify adapter only)                      |
-| `dependency`    | Import/call edge, identifier `"src -> dst"` (optional Graphify adapter only) |
+| `dependency` | Import/call edge, identifier `"src -> dst"` (optional Graphify adapter only; written to `Generated/graphify/CODE_GRAPH.jsonl`, never stdout — keeps the eager-loaded index inside the activation token budget) |
 
 **Additive fields:** the optional adapter appends `engine` (e.g. `graphifyy==0.9.43`) and
 `confidence` (`EXTRACTED`) to each record. Consumers of the contract MUST ignore unknown
@@ -84,6 +84,8 @@ fields — the four base fields are the contract; everything else is provenance.
 
 **Fail-closed guarantee:** an extractor that cannot produce a `path:line` citation
 MUST drop the entry silently (never emit an entry with empty `path` or `line <= 0`).
+This binds the optional adapter too: `extract_graphify.py` drops any node or edge whose
+line number it cannot resolve rather than defaulting it to line 1.
 
 **JSON safety:** All four code-symbol extractors delegate serialization to
 `python3 json.dumps` rather than `printf`. This ensures that identifiers
@@ -208,10 +210,10 @@ Test locations: `.tftest.hcl` and Terratest `*_test.go` files.
 
 ---
 
-### `extract_graphify.py` (optional engine adapter — ON by default, opt-out)
+### `extract_graphify.py` (optional engine adapter — runs when the engine is installed)
 
 ```bash
-python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # runs if engine installed
+python3 scripts/onboarding/extract_graphify.py <REPO_PATH>          # runs if graphifyy is installed
 GRAPHIFY_ADAPTER=0 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # kill switch
 ```
 
@@ -219,29 +221,64 @@ Runs the `graphifyy` code-graph pass (deterministic tree-sitter AST — no LLM, 
 and maps its `graph.json` into the code-symbol contract. The engine is a **tenant behind
 the contract, never load-bearing**:
 
-- **On by default, opt-out:** the engine only runs if it was deliberately installed —
-  installation is the consent act. Not installed → clean skip (exit 0, zero records) with
-  a one-line install hint. Removal drill: `GRAPHIFY_ADAPTER=0` (or uninstall the engine)
-  and the framework degrades to the extractors above.
+- **Gated on installation, with a fail-closed kill switch.** The engine is a pip package
+  nobody has by default, so installing it is the opt-in. `GRAPHIFY_ADAPTER` disables the
+  adapter for any value that is not an explicit affirmative (`1`/`true`/`yes`/`on`), so
+  `GRAPHIFY_ADAPTER=disabled` and any typo stop the engine rather than silently running it.
+  Removal drill: set the kill switch or uninstall the engine, and the framework degrades to
+  the extractors above.
 - **Preflight:** requires `graphifyy >= 0.9.24` installed (`pip install 'graphifyy==0.9.43'`,
-  note the double `y`); absent or too old → clean skip with a loud stderr note.
-- **Zero-egress guarantee:** the engine subprocess runs with a sanitized environment —
-  every provider prefix (`OPENAI_`, `ANTHROPIC_`, `AWS_`, ...) and every `*_API_KEY`,
-  `*_BASE_URL`, `*_TOKEN`, `*_SECRET` variable is stripped, so the LLM/semantic pass
-  cannot authenticate anywhere. Code pass only, by construction.
+  note the double `y`); absent or too old → clean skip with a loud stderr note. The floor is
+  a known-good schema baseline, not a pin — the mapper is verified against `0.9.43` and
+  tolerates additive drift. When a `GRAPHIFY_CMD` override is honoured (see the env knobs
+  below) the operator has named their own engine, so the distribution floor is skipped and
+  provenance is stamped from `GRAPHIFY_ENGINE_ID` (default `graphifyy==unknown`).
+- **Code-only invocation — this is the egress guarantee.** The adapter calls only the
+  engine's `update` subcommand ("re-extract code files and update the graph (no LLM
+  needed)" per the engine help) with `--no-cluster`. The LLM-dependent paths (`extract`,
+  community labeling) are never invoked.
+- **Credential stripping — defence in depth, not the guarantee.** The subprocess env has
+  every provider prefix (`OPENAI_`, `ANTHROPIC_`, `AWS_`, ...), every credential-shaped
+  suffix (`*_API_KEY`, `*_BASE_URL`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PASSWD`,
+  `*_KEY`, `*_PAT`, `*_CREDENTIALS`, any case) and an exact denylist removed — the
+  denylist covers `SSH_AUTH_SOCK` (a live ssh-agent socket: an active authentication
+  channel, not just a readable secret), the proxy redirectors
+  (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`), `NETRC` and bare `API_KEY`. This is
+  best-effort and blocks env-based credentials and channels only; it does **not** reach
+  credentials the engine could read from files under `$HOME` (`~/.aws/credentials`,
+  `~/.netrc`, `~/.config/gh/hosts.yml`), and it is not a network sandbox — which is why
+  the code-only invocation above is what the safety posture actually rests on.
 - **Confidence gate:** `EXTRACTED` records emit; `INFERRED` records are quarantined to
   `Generated/graphify/NEEDS_VERIFICATION.jsonl` (never the index); `AMBIGUOUS` is dropped
-  and counted. Unknown node kinds are counted on stderr, never emitted.
-- **Engine output** stays in `$REPO_PATH/Generated/graphify/` (machine-local tier) —
-  the engine-native `graphify-out/` directory is relocated there after the run.
-- **Code-only invocation:** the adapter calls the engine's `update` subcommand
-  ("re-extract code files and update the graph (no LLM needed)" per the engine help)
-  with `--no-cluster`. The LLM-dependent paths (`extract`, community labeling) are
-  never invoked.
-- Env knobs: `GRAPHIFY_CMD` (default: the adapter's own interpreter `-m graphify` —
-  install graphifyy into the interpreter that runs the adapter, or point this at the
-  right one), `GRAPHIFY_SUBCOMMAND` (default `update`), `GRAPHIFY_ARGS` (default
-  `--no-cluster`), `GRAPHIFY_TIMEOUT` (default 900s).
+  and counted. A dependency edge inherits the WEAKEST confidence among itself and both
+  endpoint nodes — an edge touching a quarantined node is quarantined, one touching a
+  dropped node is dropped. Records arriving with no `confidence` field are treated as
+  `EXTRACTED`, counted separately, and reported with a `WARNING` so engine schema drift
+  is visible. Unknown node kinds are counted on stderr, never emitted.
+- **Fail-closed on citations:** a node or edge whose line number cannot be resolved is
+  dropped and counted, never emitted with a fabricated `line: 1`.
+- **Stale-output safety:** the engine output directory is cleared before each run, and a
+  non-zero engine exit emits nothing — a failed run can never republish the previous run's
+  symbols.
+- **Engine output** stays in `$REPO_PATH/Generated/graphify/`. That path is **not** covered
+  by any existing ignore rule, so the adapter writes `Generated/graphify/.gitignore`
+  (containing `*`) on every run to keep the engine's output out of the target repo's
+  history.
+- **Dependency edges never reach stdout.** At real-repo scale they are the bulk of the
+  output (1,803 of 3,159 records on the largest test repo) and would blow the eager-load
+  activation budget of the `CODE_INDEX.md` they feed. `EXTRACTED` dependency records are
+  written to `Generated/graphify/CODE_GRAPH.jsonl` for on-demand use instead.
+- Env knobs: `GRAPHIFY_CMD` (default: the adapter's own interpreter `-m graphify` — install
+  graphifyy into the interpreter that runs the adapter). A non-default `GRAPHIFY_CMD` is a
+  code-execution surface, so it is honoured **only when `GRAPHIFY_ALLOW_CMD_OVERRIDE=1` is
+  also set** and is logged loudly; without the gate the override is ignored. When honoured,
+  the packaged version floor is skipped and provenance is stamped from `GRAPHIFY_ENGINE_ID`
+  (default `graphifyy==unknown`). `GRAPHIFY_SKIP_PREFLIGHT=1` bypasses the installed-package
+  lookup (test seam, logged). Also: `GRAPHIFY_SUBCOMMAND` (default `update`), `GRAPHIFY_ARGS`
+  (default `--no-cluster`), `GRAPHIFY_TIMEOUT` (default 900s). A malformed value on any of
+  these is reported and skipped cleanly rather than raising.
+
+**Requires:** `python3 3.9+`, `graphifyy >= 0.9.24` (only when the engine is present)
 
 ---
 

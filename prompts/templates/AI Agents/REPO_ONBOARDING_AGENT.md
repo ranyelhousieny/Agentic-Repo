@@ -254,15 +254,22 @@ bash scripts/onboarding/extract_git_ownership.sh "$REPO_PATH" \
   > "$REPO_PATH/Generated/Analysis/OWNERSHIP_RAW.jsonl" 2>/dev/null || true
 
 # OPTIONAL supplemental engine — Graphify adapter (ON by default WHEN the engine
-# is installed; installation is the consent act. Kill switch: GRAPHIFY_ADAPTER=0.
-# Engine absent -> clean skip with a one-line install hint). Deterministic
-# tree-sitter code-graph pass, zero egress by construction (the adapter strips
-# all credential env vars from the engine subprocess). Emits the same JSON-lines
-# contract (+ additive engine/confidence fields) so the merge below consumes it
-# unchanged. INFERRED-confidence records are quarantined to
-# Generated/graphify/NEEDS_VERIFICATION.jsonl, never the index.
-# Removal drill: GRAPHIFY_ADAPTER=0 (or uninstall) and this line is a no-op.
-python3 scripts/onboarding/extract_graphify.py "$REPO_PATH" >> "$EXTRACTOR_OUT_FILE" 2>/dev/null || true
+# is installed; installation is the consent act. Kill switch fails CLOSED: only
+# unset or an explicit affirmative runs it; any other value skips. Engine absent
+# -> clean skip with a one-line install hint). Deterministic tree-sitter
+# code-graph pass; the code-only `update --no-cluster` invocation is the egress
+# guarantee, and the subprocess env is credential-stripped as defence in depth
+# (best-effort; see the adapter docstring for limits). module/handler records
+# land on stdout in the same JSON-lines contract (+ additive engine/confidence
+# fields) so the merge below consumes them unchanged; dependency edges go to
+# Generated/graphify/CODE_GRAPH.jsonl, NOT the eager-loaded index. INFERRED
+# records are quarantined to Generated/graphify/NEEDS_VERIFICATION.jsonl.
+# Removal drill: GRAPHIFY_ADAPTER=0 (or uninstall) and this block is a no-op.
+case "${GRAPHIFY_ADAPTER:-1}" in
+  1|true|yes|on)
+    python3 scripts/onboarding/extract_graphify.py "$REPO_PATH" >> "$EXTRACTOR_OUT_FILE" 2>/dev/null || true
+    ;;
+esac
 ```
 
 Build `Knowledge/CODE_INDEX.md` from the collected records: group by `kind`, one row per
