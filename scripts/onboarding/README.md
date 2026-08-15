@@ -15,17 +15,17 @@ bash 3.2+, python3 3.9+
 ```
 
 Every `# Requires:` header in each `.sh` and `.py` file in this directory mirrors this
-floor verbatim. Python 3.9 is the declared minimum because:
+floor verbatim.  Python 3.9 is the declared minimum because:
 
 - It is the oldest interpreter known to be in active use on operator machines (verified:
-  `/usr/bin/python3 -V` → `Python 3.9.6` on the minimum-interpreter target).
+  `/usr/bin/python3 -V` → `Python 3.9.6` on the AC4 regression target).
 - `dict |` merge (PEP 584) and `str.removeprefix`/`removesuffix` (PEP 616) require 3.9 —
   both are safe to use at or above the floor.
 - PEP 604 union-type annotations (`X | Y`) require **Python 3.10+** and are therefore
-  **forbidden** in this directory. Use `typing.Optional[X]` instead (PEP 484).
+  **forbidden** in this directory.  Use `typing.Optional[X]` instead (PEP 484).
 - Python 3.8 is not a supported target; no operator machine is known to run it.
 
-Bash 3.2 compatibility is already enforced — the `# Requires: bash 3.2+` note on
+Bash 3.2 compatibility is already enforced (B15) — the `# Requires: bash 3.2+` note on
 each script documents and locks that guarantee.
 
 **Sweep results:** `git grep -nE '\| *None|None *\|' scripts/onboarding/`
@@ -41,11 +41,11 @@ returned exactly one hit prior to this fix (`verify_citations.sh:311`), now reso
 This directory contains **two distinct families** of scripts with **different stdout schemas**.
 Do not mix them up.
 
-| Family                                                                 | Scripts                                                                                      | Schema                                                                                    |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Code-symbol extractors                                                 | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol                                  |
-| Optional engine adapter (ON by default when engine installed, opt-out) | `extract_graphify.py`                                                                        | Same `{path, line, kind, identifier}` contract + additive `{engine, confidence}` fields   |
-| Ownership extractor                                                    | `extract_git_ownership.sh`                                                                   | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
+| Family | Scripts | Schema |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Code-symbol extractors | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol |
+| Optional engine adapter (runs only when the engine is installed) | `extract_graphify.py`                                                                        | Same `{path, line, kind, identifier}` contract + additive `{engine, confidence}` fields   |
+| Ownership extractor | `extract_git_ownership.sh` | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
 
 ---
 
@@ -58,25 +58,25 @@ Each line is one record:
 {"path":"<relative-path>","line":<int>,"kind":"<kind>","identifier":"<identifier>"}
 ```
 
-| Field        | Type    | Description                        |
+| Field | Type | Description |
 | ------------ | ------- | ---------------------------------- |
-| `path`       | string  | File path relative to `$REPO_PATH` |
-| `line`       | integer | 1-based line number of the symbol  |
-| `kind`       | string  | One of the values below            |
-| `identifier` | string  | Human-readable name / label        |
+| `path` | string | File path relative to `$REPO_PATH` |
+| `line` | integer | 1-based line number of the symbol |
+| `kind` | string | One of the values below |
+| `identifier` | string | Human-readable name / label |
 
 ### `kind` values (code-symbol extractors only)
 
-| Kind            | Meaning                                                                      |
-| --------------- | ---------------------------------------------------------------------------- |
-| `module`        | Top-level package, Maven module, or directory boundary                       |
-| `entry_point`   | Application entry point (main class, `FastAPI()`, etc.)                      |
-| `endpoint`      | HTTP/RPC endpoint or CLI command                                             |
-| `config`        | Config key or env-var (`@Value`, `process.env.KEY`, `var.name`)              |
-| `integration`   | External dependency / integration point                                      |
-| `test_location` | Test file or test directory root                                             |
-| `handler`       | Function/method symbol (optional Graphify adapter only)                      |
-| `dependency` | Import/call edge, identifier `"src -> dst"` (optional Graphify adapter only; written to `Generated/graphify/CODE_GRAPH.jsonl`, never stdout — keeps the eager-loaded index inside the activation token budget) |
+| Kind | Meaning |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `module` | Top-level package, Maven module, or directory boundary |
+| `entry_point` | Application entry point (main class, `FastAPI()`, etc.) |
+| `endpoint` | HTTP/RPC endpoint or CLI command |
+| `config` | Config key or env-var (`@Value`, `process.env.KEY`, `var.name`) |
+| `integration` | External dependency / integration point |
+| `test_location` | Test file or test directory root |
+| `handler`       | Function/method symbol (optional Graphify adapter only)                                                                                                                                                        |
+| `dependency`    | Import/call edge, identifier `"src -> dst"` (optional Graphify adapter only; written to `Generated/graphify/CODE_GRAPH.jsonl`, never stdout — keeps the eager-loaded index inside the activation token budget) |
 
 **Additive fields:** the optional adapter appends `engine` (e.g. `graphifyy==0.9.43`) and
 `confidence` (`EXTRACTED`) to each record. Consumers of the contract MUST ignore unknown
@@ -96,7 +96,7 @@ never produce invalid JSON or cause `printf` format-specifier injection.
 
 ## Ownership Extractor CLI Contract
 
-`extract_git_ownership.sh` emits a **different** JSON-lines schema (v2):
+`extract_git_ownership.sh` emits a **different** JSON-lines schema (T1 v2):
 
 ```json
 {
@@ -113,18 +113,18 @@ never produce invalid JSON or cause `printf` format-specifier injection.
 }
 ```
 
-| Field                | Type             | Description                                                                                                         |
+| Field | Type | Description |
 | -------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `area`               | string           | Top-level directory name (e.g. `"src"`, `"tests"`, `"."` for root)                                                  |
-| `original_architect` | string or null   | All-time most-active committer in the area (bot-filtered)                                                           |
-| `current_maintainer` | string or null   | Most recent committer in the window (bot-filtered)                                                                  |
-| `codeowners_entry`   | string or null   | Matching CODEOWNERS entry for this area (null if no CODEOWNERS file)                                                |
-| `catalog_info_owner` | string or null   | `spec.owner` from `catalog-info.yaml` (null if not present)                                                         |
-| `agreement`          | string           | `AGREE` — git and static sources match; `CONFLICTING` — they disagree; `SINGLE_SOURCE` — only git history available |
-| `derivation_date`    | string           | ISO-8601 date the record was derived                                                                                |
-| `top_committers`     | array of strings | Up to 3 most-active human committers in the window, `"Name <email>"` format                                         |
-| `last_touched_date`  | string           | ISO-8601 date of the most recent commit in the window                                                               |
-| `commit_count`       | integer          | Total **human** (bot-filtered) commits in the window for this area                                                  |
+| `area` | string | Top-level directory name (e.g. `"src"`, `"tests"`, `"."` for root) |
+| `original_architect` | string or null | All-time most-active committer in the area (bot-filtered) |
+| `current_maintainer` | string or null | Most recent committer in the window (bot-filtered) |
+| `codeowners_entry` | string or null | Matching CODEOWNERS entry for this area (null if no CODEOWNERS file) |
+| `catalog_info_owner` | string or null | `spec.owner` from `catalog-info.yaml` (null if not present) |
+| `agreement` | string | `AGREE` — git and static sources match; `CONFLICTING` — they disagree; `SINGLE_SOURCE` — only git history available |
+| `derivation_date` | string | ISO-8601 date the record was derived |
+| `top_committers` | array of strings | Up to 3 most-active human committers in the window, `"Name <email>"` format |
+| `last_touched_date` | string | ISO-8601 date of the most recent commit in the window |
+| `commit_count` | integer | Total **human** (bot-filtered) commits in the window for this area |
 
 **Bot filtering:** Reads `scripts/onboarding/bot_identities.txt`. Bots are excluded from
 `top_committers`, `original_architect`, `current_maintainer`, and `commit_count`. Areas
@@ -166,11 +166,11 @@ bash scripts/onboarding/extract_express.sh <REPO_PATH> [SRC_ROOTS...]
 Detects Express/NestJS route handlers (`router.get(...)`, `@Get(...)`), `process.env.KEY`
 references, `.env` file keys, `axios`/`fetch`/`got` integration calls, and spec/test files.
 
-**Source root detection:** If no `src/` directory exists, the extractor falls back to
+**Source root detection (B16):** If no `src/` directory exists, the extractor falls back to
 scanning `$REPO_PATH` root with `node_modules/build/dist/target` excluded. Explicit
 `SRC_ROOTS` can be passed as extra arguments (from `PHASE1_DETECTION.md Step 3.5`).
 
-**Bash 3.2 compatibility:** Uses `tr` instead of `${var,,}`, `while-read` instead of
+**Bash 3.2 compatibility (B15):** Uses `tr` instead of `${var,,}`, `while-read` instead of
 `mapfile/readarray`, no associative arrays.
 
 **Requires:** `bash 3.2+`, `grep`, `find`, `python3 3.9+`
@@ -189,7 +189,7 @@ which would produce phantom endpoint rows), `@Value` / `@ConfigurationProperties
 
 Class-level `@RequestMapping` is captured as a `config` record (base-path), not an endpoint.
 
-**Source root detection:** Falls back to scanning `$REPO_PATH` when no `src/` exists.
+**Source root detection (B16):** Falls back to scanning `$REPO_PATH` when no `src/` exists.
 Explicit `SRC_ROOTS` can be passed (from `PHASE1_DETECTION.md Step 3.5`).
 
 **Requires:** `bash 3.2+`, `grep`, `find`, `sed`, `awk`, `python3 3.9+`
@@ -213,8 +213,9 @@ Test locations: `.tftest.hcl` and Terratest `*_test.go` files.
 ### `extract_graphify.py` (optional engine adapter — runs when the engine is installed)
 
 ```bash
-python3 scripts/onboarding/extract_graphify.py <REPO_PATH>          # runs if graphifyy is installed
+python3 scripts/onboarding/extract_graphify.py <REPO_PATH>          # runs if graphifyy is installed in a 3.10+ interpreter
 GRAPHIFY_ADAPTER=0 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # kill switch
+GRAPHIFY_PYTHON=python3.13 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # name the engine's interpreter
 ```
 
 Runs the `graphifyy` code-graph pass (deterministic tree-sitter AST — no LLM, no network)
@@ -227,20 +228,30 @@ the contract, never load-bearing**:
   `GRAPHIFY_ADAPTER=disabled` and any typo stop the engine rather than silently running it.
   Removal drill: set the kill switch or uninstall the engine, and the framework degrades to
   the extractors above.
-- **Preflight:** requires Python **>= 3.10** for the engine (the adapter itself runs on 3.9,
-  but it invokes the engine in its own interpreter — under an older Python it states the
-  floor and skips cleanly instead of surfacing pip's version-skew noise) and
-  `graphifyy >= 0.9.24` installed (`python3.13 -m pip install 'graphifyy==0.9.43'`, note the
-  double `y`; any 3.10+ interpreter works); absent or too old → clean skip with a loud
-  stderr note. The version floor is a known-good schema baseline, not a pin — the mapper is
-  verified against `0.9.43` and tolerates additive drift. When a `GRAPHIFY_CMD` override is
-  honoured (see the env knobs below) the operator has named their own engine, so the
-  distribution floor is skipped and provenance is stamped from `GRAPHIFY_ENGINE_ID`
-  (default `graphifyy==unknown`).
-- **Code-only invocation — this is the egress guarantee.** The adapter calls only the
-  engine's `update` subcommand ("re-extract code files and update the graph (no LLM
-  needed)" per the engine help) with `--no-cluster`. The LLM-dependent paths (`extract`,
-  community labeling) are never invoked.
+- **Preflight:** the engine requires Python **>= 3.10**, and that floor is checked against
+  the interpreter that will actually RUN it — not against the one running this adapter.
+  This distinction is the whole ballgame under Phase 1.5, which invokes the adapter as bare
+  `python3`: on a stock macOS box that is 3.9.6 (the floor this directory declares), so
+  checking the adapter's own interpreter made the feature unreachable through the only path
+  that invokes it. Resolution order is `GRAPHIFY_PYTHON`, else the adapter's own interpreter
+  when it already meets the floor, else a probe of `python3.13`…`python3.10` on `PATH`. Only
+  when none of those yields a 3.10+ interpreter does the adapter state the floor, name what
+  it probed, and skip cleanly. It then requires `graphifyy >= 0.9.24` installed **in that
+  interpreter** (`python3.13 -m pip install 'graphifyy==0.9.43'`, note the double `y`);
+  absent or too old → clean skip with a loud stderr note. The version floor is a known-good
+  schema baseline, not a pin — the mapper is verified against `0.9.43` and tolerates
+  additive drift. When a `GRAPHIFY_CMD` override is honoured (see the env knobs below) the
+  operator has named their own engine, so the distribution floor is skipped and provenance
+  is stamped from `GRAPHIFY_ENGINE_ID` (default `graphifyy==unknown`).
+- **Code-only invocation — this is the egress guarantee, and it is GATED.** The adapter
+  calls only the engine's `update` subcommand ("re-extract code files and update the graph
+  (no LLM needed)" per the engine help) with `--no-cluster`. The LLM-dependent paths
+  (`extract`, community labeling) are not invoked. Because the guarantee is made of exactly
+  those two values, `GRAPHIFY_SUBCOMMAND` and `GRAPHIFY_ARGS` are **ignored unless
+  `GRAPHIFY_ALLOW_LLM_PATH=1` is explicitly set** — otherwise the whole safety posture sat
+  one ungated env var away from false while the invocation log still announced the
+  code-only path. When the gate is set the run is logged as `OVERRIDDEN` and the log
+  withdraws the code-only claim for that run rather than asserting it.
 - **Credential stripping — defence in depth, not the guarantee.** The subprocess env has
   every provider prefix (`OPENAI_`, `ANTHROPIC_`, `AWS_`, ...), every credential-shaped
   suffix (`*_API_KEY`, `*_BASE_URL`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_PASSWD`,
@@ -258,9 +269,14 @@ the contract, never load-bearing**:
   and counted. A dependency edge inherits the WEAKEST confidence among itself and both
   endpoint nodes — an edge touching a quarantined node is quarantined, one touching a
   dropped node is dropped. Measured fact (`graphifyy==0.9.43`, every repo tested): **node
-  records carry no `confidence` field at all**, so they default to `EXTRACTED`, are counted
-  (`confidence_absent`), and trip a loud `WARNING` — for nodes the gate is a schema-drift
-  detector today, not a filter. Unknown node kinds are counted on stderr, never emitted.
+  records carry no `confidence` field at all**, so they default to `EXTRACTED` — for nodes
+  the gate is a forward-compatible hook today, not a filter. The diagnostic is scoped to
+  that fact: a **100%-absent** count is reported as the expected baseline, and a `WARNING`
+  is reserved for a **partial** split, which is the only shape that actually signals schema
+  drift. (Warning on any non-zero count meant warning on every clean run, at a count equal
+  to the whole node set — the reading this paragraph explicitly retracts.) Only nodes are
+  counted; edges carry no `confidence` key by design, which is why `weakest_confidence`
+  exists. Unknown node kinds are counted on stderr, never emitted.
 - **Vendored/generated/minified code is excluded before emission** (`node_modules/`,
   `vendor/`, `dist/`, `build/`, `target/`, `*.min.js`, `*-bundle.js`, `swagger-ui/`,
   virtualenvs, ...), counted and reported as `vendor_excluded`. Rationale: minified bundles
@@ -268,9 +284,20 @@ the contract, never load-bearing**:
   described Swagger's internals rather than the service.
 - **Fail-closed on citations:** a node or edge whose line number cannot be resolved is
   dropped and counted, never emitted with a fabricated `line: 1`.
-- **Stale-output safety:** the engine output directory is cleared before each run, and a
-  non-zero engine exit emits nothing — a failed run can never republish the previous run's
-  symbols.
+- **Stale-output safety:** **every** artifact the adapter derives is removed before the
+  engine runs — the engine-native `graphify-out/` tree AND `CODE_GRAPH.jsonl`,
+  `NEEDS_VERIFICATION.jsonl` and `CODE_INDEX_RECORDS.jsonl` — and a non-zero engine exit
+  emits nothing. Clearing only the engine's own output was one layer short: the derived
+  files are written conditionally, so a failed run, or one that honestly produced zero
+  edges or zero `INFERRED` records, left the previous run's file on disk stamped with the
+  previous run's `engine=` and nothing downstream could tell. That matters most for
+  `NEEDS_VERIFICATION.jsonl`, which is the list an operator is told to check before
+  promoting anything.
+- **Provenance survives the Phase 1.5 boundary.** The materialiser keeps only the four
+  contract fields, marks every row `VERIFIED`, then deletes the extractor file — so nothing
+  downstream would record which `CODE_INDEX.md` rows came from a third-party engine rather
+  than the first-party extractors. The adapter mirrors exactly what it sent to stdout,
+  `engine`/`confidence` included, to `Generated/graphify/CODE_INDEX_RECORDS.jsonl`.
 - **Engine output** stays in `$REPO_PATH/Generated/graphify/`. That path is **not** covered
   by any existing ignore rule, so the adapter writes `Generated/graphify/.gitignore`
   (containing `*`) on every run to keep the engine's output out of the target repo's
@@ -279,49 +306,36 @@ the contract, never load-bearing**:
   output (1,803 of 3,159 records on the largest test repo) and would blow the eager-load
   activation budget of the `CODE_INDEX.md` they feed. `EXTRACTED` dependency records are
   written to `Generated/graphify/CODE_GRAPH.jsonl` for on-demand use instead.
-- Env knobs: `GRAPHIFY_CMD` (default: the adapter's own interpreter `-m graphify` — install
-  graphifyy into the interpreter that runs the adapter). A non-default `GRAPHIFY_CMD` is a
-  code-execution surface, so it is honoured **only when `GRAPHIFY_ALLOW_CMD_OVERRIDE=1` is
-  also set** and is logged loudly; without the gate the override is ignored. When honoured,
-  the packaged version floor is skipped and provenance is stamped from `GRAPHIFY_ENGINE_ID`
-  (default `graphifyy==unknown`). `GRAPHIFY_SKIP_PREFLIGHT=1` bypasses the installed-package
-  lookup (test seam, logged). Also: `GRAPHIFY_SUBCOMMAND` (default `update`), `GRAPHIFY_ARGS`
-  (default `--no-cluster`), `GRAPHIFY_TIMEOUT` (default 900s). A malformed value on any of
-  these is reported and skipped cleanly rather than raising.
+- Env knobs: `GRAPHIFY_PYTHON` (interpreter that runs the engine — see Preflight above).
+  `GRAPHIFY_CMD` (default: `<engine interpreter> -m graphify`). A non-default
+  `GRAPHIFY_CMD` is a code-execution surface, so it is honoured **only when
+  `GRAPHIFY_ALLOW_CMD_OVERRIDE=1` is also set** and is logged loudly; without the gate the
+  override is ignored. Note the asymmetry with `GRAPHIFY_PYTHON`, which needs no gate
+  because it names an interpreter while the module stays hard-coded to `-m graphify`. When
+  a command override is honoured, the packaged version floor is skipped and provenance is
+  stamped from `GRAPHIFY_ENGINE_ID` (default `graphifyy==unknown`).
+  `GRAPHIFY_SKIP_PREFLIGHT=1` bypasses the installed-package lookup (test seam, logged).
+  `GRAPHIFY_SUBCOMMAND` (default `update`) and `GRAPHIFY_ARGS` (default `--no-cluster`)
+  require `GRAPHIFY_ALLOW_LLM_PATH=1` — a deliberately separate gate from the command one,
+  since every stub-engine test needs the command gate and sharing one variable would hand
+  the larger power to every test seam. `GRAPHIFY_TIMEOUT` (default 900s; the Phase 1.5 hook
+  caps it at 300s, because default-on puts the engine on the critical path of every
+  conversion). A malformed value on any of these is reported and skipped cleanly rather
+  than raising, and so is an unwritable target repo — the adapter always exits 0.
 
-**Requires:** `python3 3.9+`, `graphifyy >= 0.9.24` (only when the engine is present)
+**Requires:** `python3 3.9+` to run the adapter; `graphifyy >= 0.9.24` installed in a
+Python **3.10+** interpreter for the engine to actually run (point `GRAPHIFY_PYTHON` at it
+if that is not the interpreter running the adapter). Engine absent → clean skip.
 
 ---
 
-### `readiness_report.py` (scored agent-readiness report — local artifact only)
-
-Emits `Generated/READINESS_REPORT.md`: five gated levels (L1 Orientation, L2 Hygiene,
-L3 Instruction layer, L4 Knowledge layer, L5 Governed autonomy), pass >= 80% of a
-level's applicable criteria to unlock the next, levels unlock contiguously. Every
-criterion is a checkable filesystem fact with a remediation hint mapping to a framework
-motion — the converter IS the remediation for L3-L5.
-
-- **Mechanics lineage, honestly stated:** the gated-level scoring, difficulty axis
-  (Basic/Intermediate/Advanced) and report-then-fix loop are adapted from Factory's
-  Agent Readiness Model (docs.factory.ai/agent-readiness/overview, assessed 2026-08-14).
-  Deliberately NOT adopted: platform persistence (this report never leaves the machine),
-  the git `origin` requirement (a bare directory scores), and criteria without visible
-  evidence commands.
-- **N/A semantics:** a criterion may be not-applicable (excluded from the denominator).
-  The `code-graph` criterion applies only when the optional engine adapter ever ran —
-  a repo is never penalized for a tool it never used.
-- **Eager-load budget is measured, not assumed:** sums the byte size of
-  `CLAUDE.md`/`AGENTS.md`/`START_HERE*`/`Knowledge/CODE_INDEX.md` against a 100k-char cap.
-- Usage: `python3 scripts/onboarding/readiness_report.py <repo_path> [--stdout]`;
-  always exits 0; one-line JSON summary on stderr for pipelines.
-
-### `extract_git_ownership.sh` (ownership extractor — different schema, v2)
+### `extract_git_ownership.sh` (ownership extractor — different schema, T1 v2)
 
 ```bash
 bash scripts/onboarding/extract_git_ownership.sh <REPO_PATH> [--months N]
 ```
 
-Emits one JSON record per top-level directory area using the **ownership schema v2**:
+Emits one JSON record per top-level directory area using the **T1 ownership schema v2**:
 
 ```json
 {
@@ -343,9 +357,9 @@ Default look-back window: 12 months.
 **Bot filtering:** reads `scripts/onboarding/bot_identities.txt`. Bots are excluded from all
 committer fields and `commit_count`. Areas where ALL commits are bots are silently dropped.
 
-**Email deduplication:** The identity counter is keyed on the **lowercased email
+**Email deduplication (B17):** The identity counter is keyed on the **lowercased email
 address**, not on `"Name <email>"`. This means two display names for the same email address
-(e.g. `asmith 14 commits` + `Alice Smith 5 commits`, same email) are counted as one
+(e.g. `relhousieny 14 commits` + `Rany ElHousieny 5 commits`, same email) are counted as one
 person (true total: 19). The canonical display name for the output record is the most-frequent
 name seen for that email address.
 
@@ -356,6 +370,59 @@ name seen for that email address.
 - `SINGLE_SOURCE` — only git history available (no CODEOWNERS, no catalog-info spec.owner).
 
 **Requires:** `git`, `bash 3.2+`, `awk`, `sort`, `python3 3.9+` (for JSON-safe serialization)
+
+---
+
+### `readiness_report.py` (scored agent-readiness report — local artifact only)
+
+```bash
+python3 scripts/onboarding/readiness_report.py <REPO_PATH> [--stdout]
+```
+
+Run by the onboarding agent at **Step 15.5** (after the Step 15 verification gate), and
+usable standalone against any directory. Emits `Generated/READINESS_REPORT.md`: five gated
+levels (L1 Orientation, L2 Hygiene, L3 Instruction layer, L4 Knowledge layer, L5 Governed
+autonomy). Every criterion is a checkable filesystem fact with a remediation hint mapping
+to a framework motion — the converter IS the remediation for L3-L5.
+
+- **Mechanics lineage, honestly stated:** the gated-level scoring, difficulty axis
+  (Basic/Intermediate/Advanced) and report-then-fix loop are adapted from Factory's
+  Agent Readiness Model (docs.factory.ai/agent-readiness/overview, assessed 2026-08-14).
+  Deliberately NOT adopted: platform persistence (this report never leaves the machine),
+  the git `origin` requirement (a bare directory scores), and criteria without visible
+  evidence commands.
+- **The gate is 80%, and that rounds up to 100% here.** A level passes at >= 80% of its
+  applicable criteria, and the achieved level is the highest level whose lower levels all
+  pass too — a passing level above a failing one does not raise the score, and the report
+  says so per row. With only 3-4 criteria per level, 80% rounds up to *every* applicable
+  criterion (2/3 = 67%, 3/4 = 75%), so the report prints the derived threshold in a
+  `Needed` column instead of implying tolerance that does not exist.
+- **Local artifact, enforced rather than asserted:** the report records the absolute repo
+  path, and the conversion's final instruction is `git add -A && git commit` (Step 16),
+  so the writer drops a scoped `Generated/.gitignore` entry for `READINESS_REPORT.md`
+  next to it. Same reasoning as this framework's own `.gitignore` rule for
+  `Generated/Repos/*_PROFILE.md` ("carry machine paths... local-only").
+- **N/A semantics:** a criterion may be not-applicable (excluded from the denominator, and
+  printed with no remediation because it is not work owed). The `code-graph` criterion is
+  pass-or-N/A: `Generated/graphify/CODE_GRAPH.jsonl` present means pass, absent means N/A.
+  It is never a failure — an optional engine that is merely installed, or that ran and
+  found no dependency edges, must not be able to lower a repo's level.
+- **Eager-load budget is measured, not assumed:** sums the byte size of the whole
+  Session-Init boundary the converter injects into `CLAUDE.md`
+  (`CLAUDE.md`, `AGENTS.md`, `START_HERE*`, `Knowledge/KNOWLEDGE_GRAPH.md`,
+  `Knowledge/CODE_INDEX.md`, `Knowledge/Source of Truth/PROJECT_VISION.md`,
+  `Generated/PROGRESS_TRACKER.md`, `.claude/skills/*/SKILL.md`) against the framework's
+  own documented limit — 360,000 bytes, the same set and unit as the `wc -c` measurement
+  in `REPO_ONBOARDING_AGENT.md` "Activation Token Budget" (rationale in framework history).
+- **L5 measures use, not scaffolding:** the converter creates `Generated/session_logs/`
+  and `Knowledge/Source of Truth/` itself, so those criteria require at least one real
+  file, not just the directory.
+- Always exits 0 — including on a read-only target tree (the write failure becomes a
+  stderr warning). One-line JSON summary on stderr for pipelines.
+
+**Requires:** `python3 3.9+`
+
+---
 
 ### `bot_identities.txt`
 
@@ -369,20 +436,19 @@ Comments start with `#`. Two matching modes:
 - **EMAIL_GLOB** — lines containing `@` match against the email portion of `"Name <email>"` strings. Shell-style globs (`*`). Example: `*-sa@*`, `*@noreply.*`
 - **NAME_SUBSTR** — lines NOT containing `@` are matched case-insensitively as a substring of the full `"Name <email>"` string. Example: `renovate`, `dependabot`
 
-Edit this file to add org-specific bot identities. Default entries cover `renovate[bot]`,
-`dependabot[bot]`, `github-actions[bot]`, `gitlab-ci-token`, noreply patterns, and `*-sa@*`
-service-account globs.
+Edit this file to add org-specific bot identities. Default entries cover `svc-automation`,
+`renovate[bot]`, `dependabot[bot]`, `gitlab-ci-token`, noreply patterns, and `*-sa@*` service accounts.
 
 ---
 
-### `verify_citations.sh` (citation hard gate)
+### `verify_citations.sh` (T3 hard gate)
 
 ```bash
 bash scripts/onboarding/verify_citations.sh <ARTIFACT_FILE> [REPO_PATH] [OPTIONS]
 ```
 
-`REPO_PATH` is optional. If omitted — or if the next argument starts with `--` — CWD
-is used as the repo root. All three invocation forms work:
+`REPO_PATH` is optional.  If omitted — or if the next argument starts with `--` — CWD
+is used as the repo root.  All three invocation forms work:
 
 ```bash
 bash verify_citations.sh artifact.md --dry-run             # REPO_PATH defaults to CWD
@@ -390,24 +456,24 @@ bash verify_citations.sh artifact.md /path/to/repo         # positional REPO_PAT
 bash verify_citations.sh artifact.md --repo-path /repo     # named --repo-path flag
 ```
 
-**Claim derivation:**
+**Claim derivation (B2):**
 
 - For table rows (`| Field | Value | Evidence | Status |`): claim = Field + Value cells only
   (never from the full row, which would include the citation path and create self-referential overlap).
 - For standalone `**SOURCE:** path:line` lines: claim = nearest preceding non-citation line.
 
-**NOT_FOUND exemption:** A row is exempt **only** when the **Status column** (last
+**NOT_FOUND exemption (B4):** A row is exempt **only** when the **Status column** (last
 `|cell|`) exactly equals `NOT_FOUND` (case-insensitive). The word appearing anywhere else in
 the row is NOT sufficient — row must have `... | NOT_FOUND |` at the end.
 
-**Empty-artifact guard:** `CODE_INDEX.md`, `VALIDATION_SUMMARY.md`, and
+**Empty-artifact guard (B5):** `CODE_INDEX.md`, `VALIDATION_SUMMARY.md`, and
 `PHASE1_DETECTION.md` must contain at least 1 citation — exit 1 otherwise. Override with
 `--min-citations 0`.
 
-**Threshold validation:** `--threshold 0` and `--threshold > 1` are rejected.
+**Threshold validation (B6):** `--threshold 0` and `--threshold > 1` are rejected.
 Cited-line span is capped at 40 lines to prevent dilution via large ranges (e.g. `file:1-9999`).
 
-**SHA pinning:** `--sha S` resolves cited files via `git -C REPO_PATH show S:PATH`
+**SHA pinning (B3):** `--sha S` resolves cited files via `git -C REPO_PATH show S:PATH`
 rather than reading the mutable working tree. Use the HEAD SHA from `PHASE1_DETECTION.md`
 for reproducible gates. Default (no `--sha`) reads the working tree.
 
@@ -432,9 +498,9 @@ Options:
 - `0` — all citations resolved; citation count ≥ minimum
 - `1` — citation failure, missing file, or zero citations in citation-bearing artifact
 
-**Also checks for forbidden phrases:** `probably`, `likely`, `typically`, `generally`.
+**Also checks for forbidden phrases (T5):** `probably`, `likely`, `typically`, `generally`.
 
-**Emits `VALIDATION_SUMMARY.md`:** total claims / resolved / percentage.
+**Emits `VALIDATION_SUMMARY.md` (T6):** total claims / resolved / percentage.
 
 **Regression fixture:** `scripts/onboarding/tests/fixtures/non_resolving_citations.md` +
 `scripts/onboarding/tests/fixtures/sample_source.md`. Running the resolver against
@@ -469,7 +535,7 @@ Human-authored rows **outside** these markers are preserved verbatim on every re
 
 ---
 
-## Env-var parsing convention
+## Rule 11 compliance
 
 All `.env`-value parsing in these scripts uses `cut -d'=' -f1` (key extraction only) or
 `cut -d'=' -f2-` (value extraction with trailing dash) to avoid the documented

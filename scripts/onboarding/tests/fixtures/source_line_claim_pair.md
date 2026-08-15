@@ -1,60 +1,57 @@
 # source_line_claim_pair.md
 #
-# Regression fixture for verify_citations.sh SOURCE-line claim derivation.
+# Regression fixture for verify_citations.sh SOURCE-line claim-derivation.
 #
-# Structure: two sections with identical shape (bullets + a standalone **SOURCE:**
-# line), one carrying a wrong citation and one carrying a right citation. This is
-# what proves the resolver derives the claim from the preceding prose block rather
-# than from the citation line itself — if it read the citation line, both sections
-# would score the same.
+# This fixture models the structural pattern from CURRENT_DEV_PORTAL_REUSE_ASSESSMENT.md:
+# identical surrounding structure (Recommendation bullets + SOURCE line) with a wrong
+# citation in Section 1 and a right citation in Section 2.
 #
 # Wrong citation (Section 1):
-#   Claim: catalogue search index / ISBN lookup / cursor pagination
-#   Cites: source_line_claim_pair_source.md lines 1-30 (reading-room scheduling prose)
-#   Expected: FLAGGED — lines 1-30 contain no catalogue or search content
+#   Claim: Terraform modules / module structure / state management
+#   Cites: source_line_claim_pair_source.md lines 1-30 (hybrid-approach OPTIONS prose)
+#   Expected: FLAGGED (no Terraform content at lines 1-30)
 #
 # Right citation (Section 2):
-#   Claim: catalogue search index / stemming / cursor pagination
-#   Cites: source_line_claim_pair_source.md lines 31-60 (catalogue search prose)
-#   Expected: PASSES — the cited lines are about exactly that
+#   Claim: VPC Links / health check strategy / Terraform
+#   Cites: source_line_claim_pair_source.md lines 31-60 (CI/CD + Terraform prose)
+#   Expected: PASSES (CI/CD prose contains VPC, Terraform, health check content)
 #
-# Exit behaviour: verify_citations.sh MUST exit non-zero (one fails, one passes),
-# and the outcome must be a 1/1 split, not all-pass or all-fail.
+# Exit behaviour: verify_citations.sh MUST exit non-zero (one fails, one passes).
 
-## Catalogue Service Reuse Assessment
+## API Gateway Reuse Assessment
 
-The following sections assess which subsystems can be reused for the new service.
+The following sections assess reuse opportunities from the architecture review.
 
 ---
 
-### Section 1: Search Subsystem Reuse
+### Section 1: Infrastructure Reuse
 
-The existing catalogue search components can be adopted with minor changes:
+The following Terraform infrastructure components can be directly reused:
 
-- Current state of the search tier and its rebuild cadence
-- Existing operational familiarity with the query path
+- Current state of infrastructure tooling and deployment approach
+- Team familiarity and existing operational runbooks
 
-**Recommendation:** REUSE the catalogue search index and its query parser
+**Recommendation:** REUSE Terraform modules from the management plane
 
-- Adopt the inverted index over title and author fields
-- Keep ISBN lookup bypassing the search index for primary-key hits
-- Apply the same cursor pagination for catalogue search results
+- Adapt Terraform modules to the new service context
+- Use same module structure for consistency
+- Apply same state management conventions across environments
 
 **SOURCE:** source_line_claim_pair_source.md:1-30
 
 ---
 
-### Section 2: Query Handling Reuse
+### Section 2: Networking Reuse
 
-The query normalisation path carries over unchanged:
+The VPC configuration for the new service follows the existing pattern:
 
-- Existing stemming behaviour already matches the target requirements
-- Cursor-based paging is already implemented in the query parser
+- Existing VPC Link IDs are already configured for the target environments
+- Health check endpoints use the same TCP probe strategy as client-management
 
-**Recommendation:** REUSE catalogue search stemming and cursor pagination
+**Recommendation:** REUSE VPC Links configuration and health check strategy
 
-- Stem query terms before matching against the inverted index
-- Use cursor pagination for catalogue search results rather than an offset
-- Fall back to a title prefix scan when the stemmed query returns nothing
+- Use same VPC Links configuration as management service
+- Apply same health check strategy (TCP port 443, 30s interval)
+- Reference same stage variables for CIAM URL and VPC configuration
 
 **SOURCE:** source_line_claim_pair_source.md:31-60

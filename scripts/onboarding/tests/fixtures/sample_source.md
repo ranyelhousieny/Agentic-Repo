@@ -1,25 +1,25 @@
 # Sample Source File — Citation Resolver Fixture
 #
 # This file exists to be cited by non_resolving_citations.md.
-# Lines 10-15 and 20-25 are intentionally filled with content that does NOT
-# overlap with the claims that cite them, which proves the resolver measures
-# claim-to-evidence correspondence rather than merely checking the range exists.
+# Lines 5, 10-15, and 20-25 are intentionally filled with content
+# that does NOT overlap with the claim sentences that cite them —
+# this proves the resolver correctly flags semantic mismatch.
 
-## Section A: Opening Hours (lines 8-9)
-Reading room opens at nine and closes at six on weekdays.
+## Section A: Unrelated Content (lines 5 area)
+Option C: Hybrid Approach — combines on-premise and cloud deployment
 
-## Section B: Staff Rota Notes (lines 11-16)
-Rota planning for the coming quarter
-1. Confirm holiday cover for the front desk
-2. Recruit one weekend assistant
-3. Review the volunteer induction pack
+## Section B: Architecture Recommendation (lines 10-15)
+Next Steps / Immediate Actions (This Week)
+1. Obtain Repository Access (CRITICAL)
+2. Review existing documentation
+3. Schedule team sync
 
-## Section C: Fundraising Update (lines 18-22)
-Donation drive summary
-Current pledges: fourteen thousand
-Next committee meeting is on the first Monday
-Volunteer capacity: three people at partial hours
+## Section C: Project Management (lines 20-25)
+Sprint planning notes
+Current velocity: 14 points per sprint
+Backlog grooming scheduled for next Monday
+Team capacity: 3 engineers at 80%
 
-## Section D: Authentication (correctly cited elsewhere)
+## Section D: Actual Auth Content (correctly cited elsewhere)
 OAuth2 JWT bearer token authentication is enforced on all endpoints.
-Token validation uses an HS256 signature with a one-hour expiry.
+Token validation uses HS256 signature with 1-hour expiry.

@@ -439,7 +439,7 @@ def test_express_dotenv_keys_extracted(express_repo_with_dotenv: Path) -> None:
 
 
 def test_express_dotenv_keys_are_keys_only(express_repo_with_dotenv: Path) -> None:
-    """Env-var parsing: key extraction must not include the value or the embedded = signs."""
+    """Rule 11: key extraction must not include the value or the embedded = signs."""
     records, _ = run_bash("extract_express.sh", express_repo_with_dotenv)
     for rec in records:
         if rec["kind"] == "config" and rec["identifier"] in ("DATABASE_URL", "SECRET_KEY"):
@@ -646,10 +646,10 @@ def test_merge_sme_output_is_valid_markdown(git_repo: Path, tmp_path: Path) -> N
     assert content.index("<!-- BEGIN AUTO -->") < content.index("<!-- END AUTO -->")
 
 
-# ─── Ownership schema v2 + bot filtering ─────────────────────────────────
+# ─── T1 schema: ownership v2 + bot filtering ─────────────────────────────────
 
 def assert_valid_ownership_records(records: list[dict]) -> None:
-    """Shape assertion: every record must satisfy the ownership schema."""
+    """Shape assertion: every record must satisfy the T1 ownership schema."""
     required_fields = {
         "area", "original_architect", "current_maintainer",
         "codeowners_entry", "catalog_info_owner", "agreement",
@@ -657,7 +657,7 @@ def assert_valid_ownership_records(records: list[dict]) -> None:
     }
     for rec in records:
         missing = required_fields - set(rec.keys())
-        assert not missing, f"Ownership schema fields missing in record {rec}: {missing}"
+        assert not missing, f"T1 schema fields missing in record {rec}: {missing}"
         assert rec["agreement"] in ("AGREE", "CONFLICTING", "SINGLE_SOURCE"), \
             f"Invalid agreement value in {rec}"
         # derivation_date must look like YYYY-MM-DD
@@ -721,7 +721,7 @@ def git_repo_with_bot_only(tmp_path: Path) -> Path:
 
 
 def test_ownership_t1_schema(git_repo_with_human: Path) -> None:
-    """extract_git_ownership.sh must emit records satisfying the ownership schema."""
+    """extract_git_ownership.sh must emit records satisfying the T1 schema."""
     records, _ = run_bash_ownership(git_repo_with_human)
     assert records, "No records emitted for a valid git repo"
     assert_valid_ownership_records(records)
@@ -734,7 +734,7 @@ def test_ownership_t1_human_commit_present(git_repo_with_human: Path) -> None:
     assert src_record is not None, "Expected a record for 'src' area"
     assert "Human Dev" in (src_record.get("original_architect") or "") or \
            "Human Dev" in (src_record.get("current_maintainer") or ""), \
-        f"Human Dev not found in ownership fields: {src_record}"
+        f"Human Dev not found in T1 fields: {src_record}"
 
 
 def test_ownership_bot_filtered_from_top_committers(git_repo_with_bot_only: Path) -> None:
@@ -771,7 +771,7 @@ def test_ownership_derivation_date_present(git_repo_with_human: Path) -> None:
 
 
 def test_merge_sme_t1_schema_in_output(git_repo: Path, tmp_path: Path) -> None:
-    """merge_sme_contacts.py output must contain ownership schema column headers."""
+    """merge_sme_contacts.py output must contain T1 schema column headers."""
     output = tmp_path / "SME_CONTACTS.md"
     subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "merge_sme_contacts.py"),
@@ -779,11 +779,11 @@ def test_merge_sme_t1_schema_in_output(git_repo: Path, tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     )
     content = output.read_text()
-    assert "Original Architect" in content, "ownership column 'Original Architect' missing"
-    assert "Current Maintainer" in content, "ownership column 'Current Maintainer' missing"
-    assert "Agreement" in content, "ownership column 'Agreement' missing"
-    assert "Derivation Date" in content, "ownership column 'Derivation Date' missing"
-    assert "CODEOWNERS" in content, "ownership column 'CODEOWNERS' missing"
+    assert "Original Architect" in content, "T1 column 'Original Architect' missing"
+    assert "Current Maintainer" in content, "T1 column 'Current Maintainer' missing"
+    assert "Agreement" in content, "T1 column 'Agreement' missing"
+    assert "Derivation Date" in content, "T1 column 'Derivation Date' missing"
+    assert "CODEOWNERS" in content, "T1 column 'CODEOWNERS' missing"
 
 
 def test_merge_sme_committer_names_with_special_chars(tmp_path: Path) -> None:
@@ -791,7 +791,7 @@ def test_merge_sme_committer_names_with_special_chars(tmp_path: Path) -> None:
     subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", 'tricky"user@example.com'],
                    check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", 'O\'Quote, "Comma"'],
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", 'O\'Brien, "James"'],
                    check=True, capture_output=True)
     src = tmp_path / "src"
     src.mkdir()
@@ -816,12 +816,12 @@ def test_merge_sme_committer_names_with_special_chars(tmp_path: Path) -> None:
         assert isinstance(rec["top_committers"], list)
 
 
-# ─── No-src/ repos: repos with no src/ directory ───────────────────────────────────────
+# ─── B16: repos with no src/ directory ───────────────────────────────────────
 
 @pytest.fixture()
 def express_repo_no_src(tmp_path: Path) -> Path:
-    """Express repo with TypeScript files at root — no src/ dir."""
-    (tmp_path / "package.json").write_text('{"name":"root-app","version":"1.0.0"}')
+    """Express repo with TypeScript files at root — no src/ dir (mr-tracker shape)."""
+    (tmp_path / "package.json").write_text('{"name":"mr-tracker","version":"1.0.0"}')
     (tmp_path / "app.ts").write_text(textwrap.dedent("""\
         import express from 'express';
         const app = express();
@@ -836,31 +836,31 @@ def express_repo_no_src(tmp_path: Path) -> Path:
 
 
 def test_b16_express_no_src_emits_records(express_repo_no_src: Path) -> None:
-    """No-src/ repos: Express extractor must emit records even when no src/ directory exists."""
+    """B16: Express extractor must emit records even when no src/ directory exists."""
     records, _ = run_bash("extract_express.sh", express_repo_no_src)
-    assert records, "No-src/ repos: Express extractor must emit records for a repo without src/"
+    assert records, "B16: Express extractor must emit records for a repo without src/"
     assert_valid_records(records)
 
 
 def test_b16_express_no_src_finds_entry_point(express_repo_no_src: Path) -> None:
-    """No-src/ repos: express() at repo root must be found as an entry_point."""
+    """B16: express() at repo root must be found as an entry_point."""
     records, _ = run_bash("extract_express.sh", express_repo_no_src)
     assert any(r["kind"] == "entry_point" for r in records), \
-        "No-src/ repos: express() entry point at root not found"
+        "B16: express() entry point at root not found"
 
 
 def test_b16_express_no_src_finds_endpoint(express_repo_no_src: Path) -> None:
-    """No-src/ repos: app.get('/health') at repo root must be found as an endpoint."""
+    """B16: app.get('/health') at repo root must be found as an endpoint."""
     records, _ = run_bash("extract_express.sh", express_repo_no_src)
     endpoints = [r for r in records if r["kind"] == "endpoint"]
-    assert endpoints, "No-src/ repos: No endpoints found in no-src/ Express repo"
+    assert endpoints, "B16: No endpoints found in no-src/ Express repo"
 
 
-# ─── Email-keyed dedup: git ownership keyed by lowercased email ────────────────────────────
+# ─── B17: git ownership keyed by lowercased email ────────────────────────────
 
 @pytest.fixture()
 def git_repo_alias_committers(tmp_path: Path) -> Path:
-    """Git repo with two display names for the same email (Email-keyed dedup alias case)."""
+    """Git repo with two display names for the same email (B17 alias case)."""
     subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
     src = tmp_path / "src"
     src.mkdir()
@@ -887,20 +887,20 @@ def git_repo_alias_committers(tmp_path: Path) -> Path:
 
 
 def test_b17_email_dedup_commit_count(git_repo_alias_committers: Path) -> None:
-    """Email-keyed dedup: Two display names on same email → commit_count=4, not split."""
+    """B17: Two display names on same email → commit_count=4, not split."""
     records, _ = run_bash_ownership(git_repo_alias_committers)
     src_record = next((r for r in records if r["area"] == "src"), None)
     assert src_record is not None, "Expected a record for 'src' area"
     assert src_record["commit_count"] == 4, \
-        f"Email-keyed dedup: Expected commit_count=4 (email-deduped), got {src_record['commit_count']}"
+        f"B17: Expected commit_count=4 (email-deduped), got {src_record['commit_count']}"
 
 
 def test_b17_top_committers_uses_most_frequent_display_name(git_repo_alias_committers: Path) -> None:
-    """Email-keyed dedup: The canonical name must be the most-frequent one (Alice Smith, 3 commits)."""
+    """B17: The canonical name must be the most-frequent one (Alice Smith, 3 commits)."""
     records, _ = run_bash_ownership(git_repo_alias_committers)
     src_record = next((r for r in records if r["area"] == "src"), None)
     assert src_record is not None
     top = src_record.get("top_committers", [])
-    assert top, "Email-keyed dedup: top_committers must not be empty"
+    assert top, "B17: top_committers must not be empty"
     assert "Alice Smith" in top[0], \
-        f"Email-keyed dedup: Expected 'Alice Smith' as top committer (3 commits), got {top[0]!r}"
+        f"B17: Expected 'Alice Smith' as top committer (3 commits), got {top[0]!r}"

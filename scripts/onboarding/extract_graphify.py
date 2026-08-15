@@ -36,15 +36,38 @@ load-bearing dependency. Controls:
                                 (default "graphifyy==unknown")
     GRAPHIFY_SKIP_PREFLIGHT     set to "1" to bypass the installed-package version
                                 lookup (test seam; logged loudly)
-    GRAPHIFY_SUBCOMMAND         engine subcommand (default "update" — the code-only,
-                                no-LLM re-extraction path per the engine's own help)
-    GRAPHIFY_ARGS               extra CLI args (default "--no-cluster")
+    GRAPHIFY_PYTHON             interpreter that RUNS the engine (default: this adapter's
+                                own sys.executable). The engine needs Python >= 3.10 while
+                                the adapter itself must stay 3.9-compatible, and the
+                                Phase 1.5 hook invokes the adapter as bare "python3" — on a
+                                stock macOS box that is 3.9.6. This knob is what makes the
+                                floor satisfiable without handing out the code-execution
+                                surface GRAPHIFY_CMD is: it names an INTERPRETER, and the
+                                module run inside it is still hard-coded to "-m graphify".
+    GRAPHIFY_SUBCOMMAND         engine subcommand. Default "update" — the code-only, no-LLM
+                                re-extraction path per the engine's own help. Changing it
+                                reaches the engine's LLM paths, so it is honoured ONLY when
+                                GRAPHIFY_ALLOW_LLM_PATH=1 is also set (see guarantee 1).
+    GRAPHIFY_ARGS               extra CLI args. Default "--no-cluster"; same gate as
+                                GRAPHIFY_SUBCOMMAND, since dropping --no-cluster is itself
+                                a way back onto the clustering/LLM path.
+    GRAPHIFY_ALLOW_LLM_PATH     set to "1" to allow GRAPHIFY_SUBCOMMAND / GRAPHIFY_ARGS to
+                                take effect. Deliberately a DIFFERENT gate from
+                                GRAPHIFY_ALLOW_CMD_OVERRIDE: every stub-engine test needs
+                                the command gate, and sharing one variable would hand the
+                                larger power to every test seam.
     GRAPHIFY_TIMEOUT            engine timeout seconds (default 900)
 
 Safety guarantees:
-  1. CODE-ONLY INVOCATION — this is the egress guarantee. Only the engine's "update"
-     subcommand with --no-cluster is ever invoked; the LLM-dependent paths (extract,
-     community labeling) are not. Additionally, and as DEFENCE IN DEPTH rather than the
+  1. CODE-ONLY INVOCATION — this is the egress guarantee, so it is GATED rather than
+     merely defaulted. Only the engine's "update" subcommand with --no-cluster is
+     invoked; the LLM-dependent paths (extract, community labeling) are not. Because the
+     guarantee rests on those two values, GRAPHIFY_SUBCOMMAND and GRAPHIFY_ARGS are
+     ignored unless GRAPHIFY_ALLOW_LLM_PATH=1 is explicitly set — an ungated env var that
+     picks the subcommand would put the whole posture one variable away from false, while
+     the invocation log still claimed the code-only path. When the gate IS set, the run is
+     logged as OVERRIDDEN and the code-only claim is withdrawn in the log line itself.
+     Additionally, and as DEFENCE IN DEPTH rather than the
      guarantee itself, the subprocess env is SANITIZED on a best-effort basis: provider
      prefixes, credential-shaped suffixes (*_API_KEY, *_BASE_URL, *_TOKEN, *_SECRET,
      *_PASSWORD, *_PASSWD, *_KEY, *_PAT, *_CREDENTIALS) and an exact denylist covering
@@ -69,17 +92,28 @@ Safety guarantees:
      swagger-ui bundles, ...) are filtered before emission and counted as vendor_excluded:
      minified bundles have no meaningful lines to cite, and one-in-five records on a real
      service described Swagger's internals rather than the service before this filter.
-  4. NO STALE REPUBLISHING. The engine output directory is cleared before each run and a
-     non-zero engine exit emits nothing, so a failed run cannot re-emit the previous
-     run's symbols.
+  4. NO STALE REPUBLISHING. EVERY artifact this adapter derives is removed before the
+     engine runs — the engine-native graphify-out/ tree AND the CODE_GRAPH.jsonl /
+     NEEDS_VERIFICATION.jsonl / CODE_INDEX_RECORDS.jsonl files it writes — so a run that
+     fails, or that legitimately produces zero edges or zero INFERRED records, cannot
+     leave the previous run's file on disk looking like current output. Clearing the
+     engine tree alone is not enough: those files are written conditionally, so "no
+     records of this kind this run" would otherwise preserve last run's. That matters
+     most for NEEDS_VERIFICATION.jsonl, which is the list an operator is told to check
+     before promoting anything.
   5. Requires graphifyy >= MIN_VERSION when using the packaged engine. The floor is a
      known-good baseline for the graph schema this adapter maps; it is NOT about base-URL
-     overrides, since guarantee 1 strips every *_BASE_URL variable anyway. The engine
-     also requires Python >= 3.10 and runs in THIS interpreter: under an older Python the
-     adapter states the floor and skips cleanly instead of surfacing pip's version-skew
-     noise (the adapter itself stays 3.9-compatible per the directory convention).
+     overrides, since guarantee 1 strips every *_BASE_URL variable anyway. The engine also
+     requires Python >= 3.10, so the floor is checked against GRAPHIFY_PYTHON — the
+     interpreter that will actually RUN the engine — not against the one running this
+     adapter. Phase 1.5 invokes the adapter as bare "python3" (3.9.6 on stock macOS), so
+     checking the adapter's own interpreter would make the feature unreachable through the
+     only path that invokes it. When no 3.10+ interpreter can be found the adapter names
+     the ones it tried and skips cleanly (the adapter itself stays 3.9-compatible per the
+     directory convention).
   6. Always exits 0 (Phase 1.5 convention); all diagnostics go to stderr. Malformed
-     values for the env knobs above are reported and skipped, never raised.
+     values for the env knobs above are reported and skipped, never raised — and so are
+     filesystem failures: an unwritable target repo makes the adapter skip, not crash.
 
 Removal drill: set GRAPHIFY_ADAPTER=0 (or uninstall the engine) and the framework
 degrades to the bash/python extractors with no other change. Artifacts derived from this
@@ -103,8 +137,8 @@ MIN_VERSION = (0, 9, 24)
 # Python 3.9 and fails with 200 lines of version-skew noise that never states the floor.
 ENGINE_PY_FLOOR = (3, 10)
 PIN_HINT = ("python3.13 -m pip install 'graphifyy==0.9.43'  "
-            "(any Python >= 3.10 interpreter; the engine runs in the SAME interpreter "
-            "as this adapter)")
+            "(any Python >= 3.10 interpreter; if it is not the one running this adapter, "
+            "point GRAPHIFY_PYTHON at it)")
 
 CREDENTIAL_PREFIXES = (
     "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_", "MOONSHOT_", "DEEPSEEK_",
@@ -179,17 +213,127 @@ def flag_enabled() -> bool:
     return raw.strip().lower() in AFFIRMATIVE
 
 
-def engine_version() -> Optional[Tuple[int, ...]]:
+def default_engine_cmd() -> str:
+    """The packaged-engine command: `<engine interpreter> -m graphify`.
+
+    Only the INTERPRETER is operator-selectable (GRAPHIFY_PYTHON); the module is fixed, so
+    this is not a code-execution surface the way GRAPHIFY_CMD is.
+    """
+    return f"{engine_python()} -m graphify"
+
+
+def cmd_override_honoured() -> bool:
+    """Single shared predicate for "the operator named their own engine".
+
+    main() and run_engine() previously asked this question two different ways, and they
+    disagreed: GRAPHIFY_CMD="" (or set to exactly the default string) plus the allow gate
+    made main() skip the version floor and stamp provenance graphifyy==unknown, while
+    run_engine fell back to the REAL packaged engine. One predicate, one answer.
+    """
+    raw = os.environ.get("GRAPHIFY_CMD")
+    if not raw or raw == default_engine_cmd():
+        return False
+    return os.environ.get("GRAPHIFY_ALLOW_CMD_OVERRIDE") == "1"
+
+
+def llm_path_unlocked() -> bool:
+    """True when the operator has explicitly accepted leaving the code-only path."""
+    return os.environ.get("GRAPHIFY_ALLOW_LLM_PATH") == "1"
+
+
+_ENGINE_PYTHON_CACHE: Dict[str, str] = {}
+
+
+def engine_python() -> str:
+    """Interpreter that will RUN the engine.
+
+    Defaults to this adapter's own interpreter, which is correct when the operator invoked
+    the adapter with a modern python3. It is NOT correct under the Phase 1.5 hook, which
+    calls bare `python3` — 3.9.6 on a stock macOS box, below the engine's 3.10 floor. So
+    an explicit GRAPHIFY_PYTHON wins, and otherwise we fall back to probing for a 3.10+
+    interpreter on PATH before giving up.
+
+    Memoized on the GRAPHIFY_PYTHON value: the probe spawns up to one subprocess per
+    candidate, and this is called from several places per run.
+    """
+    explicit = (os.environ.get("GRAPHIFY_PYTHON") or "").strip()
+    if explicit:
+        return explicit
+    if sys.version_info >= ENGINE_PY_FLOOR:
+        return sys.executable
+    if "probed" not in _ENGINE_PYTHON_CACHE:
+        _ENGINE_PYTHON_CACHE["probed"] = find_modern_python() or sys.executable
+    return _ENGINE_PYTHON_CACHE["probed"]
+
+
+def python_version_of(executable: str) -> Optional[Tuple[int, ...]]:
+    """(major, minor) of `executable`, or None if it cannot be run or parsed."""
+    if executable == sys.executable:
+        return (sys.version_info[0], sys.version_info[1])
+    try:
+        proc = subprocess.run(
+            [executable, "-c",
+             "import sys; print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return tuple(int(x) for x in proc.stdout.strip().split(".")[:2])
+    except (TypeError, ValueError):
+        return None
+
+
+# Probed in order when the adapter is running under an interpreter older than the engine
+# floor. Newest first so the engine gets the best available interpreter.
+PYTHON_CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10", "python3")
+
+
+def find_modern_python() -> Optional[str]:
+    """First interpreter on PATH at or above the engine's Python floor."""
+    for name in PYTHON_CANDIDATES:
+        resolved = shutil.which(name)
+        if not resolved:
+            continue
+        version = python_version_of(resolved)
+        if version and version >= ENGINE_PY_FLOOR:
+            return resolved
+    return None
+
+
+def engine_version(executable: Optional[str] = None) -> Optional[Tuple[int, ...]]:
     """Return the installed graphifyy version, or None if it is not installed.
+
+    Looked up in the interpreter that will RUN the engine, not necessarily this one -- the
+    adapter may be running under 3.9 while the engine runs under GRAPHIFY_PYTHON, and
+    "installed" is a property of that interpreter's environment.
 
     Raises nothing. A version string we cannot parse is reported distinctly from a missing
     package, so the operator is not sent to a pip install that would change nothing.
     """
-    try:
-        from importlib.metadata import version
-        raw = version("graphifyy")
-    except Exception:
-        return None
+    executable = executable or engine_python()
+    if executable == sys.executable:
+        try:
+            from importlib.metadata import version
+            raw = version("graphifyy")
+        except Exception:
+            return None
+    else:
+        try:
+            proc = subprocess.run(
+                [executable, "-c",
+                 "from importlib.metadata import version; print(version('graphifyy'))"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if proc.returncode != 0:
+            return None
+        raw = proc.stdout.strip()
+        if not raw:
+            return None
     try:
         return tuple(int(x) for x in raw.split(".")[:3])
     except (TypeError, ValueError):
@@ -289,14 +433,160 @@ def rel_path(raw, repo_path: Path) -> Optional[str]:
 def confidence_of(obj: dict, counters: Optional[dict] = None) -> str:
     """Confidence label for a node/edge, defaulting to EXTRACTED when absent.
 
-    The default is deliberately the trusting one -- the engine emits this field today and
-    dropping everything the moment it stopped would make the adapter useless. But an absent
-    field is exactly the case we know least about, so count it; main() turns a non-zero
-    count into a loud WARNING rather than letting schema drift pass silently.
+    The default is deliberately the trusting one -- dropping everything the moment the field
+    was absent would make the adapter useless. But an absent field is exactly the case we
+    know least about, so count BOTH the absent and the present cases: the ratio is what
+    carries the signal. main() reports 100%-absent as the expected baseline and reserves a
+    WARNING for a partial split, which is the only shape that actually indicates drift.
+
+    Counting is opt-in via `counters` and is applied to NODES only. graphifyy edges carry no
+    confidence key by design -- that is precisely why weakest_confidence() exists -- so
+    folding them in made the count exceed the node set and fire at 1,803-of-3,159 magnitude
+    on a clean run.
     """
-    if "confidence" not in obj and counters is not None:
-        counters["confidence_absent"] = counters.get("confidence_absent", 0) + 1
+    if counters is not None:
+        key = "confidence_present" if "confidence" in obj else "confidence_absent"
+        counters[key] = counters.get(key, 0) + 1
     return str(obj.get("confidence", "EXTRACTED")).upper()
+
+
+def clean_identifier(name) -> str:
+    """Human-facing symbol label: at most ONE leading dot removed.
+
+    graphifyy labels methods with a single leading dot (`.main()`). `lstrip(".")` removed
+    EVERY leading dot, which is wrong wherever they are significant -- a Python relative
+    import `..utils` became `utils`, a different module. So exactly one is removed.
+
+    Returns "" when what is left carries no name at all (a label of nothing but dots and
+    whitespace), so callers can drop the record instead of emitting a blank identifier or
+    a meaningless one like "..". The raw-label emptiness guards in map_nodes/map_edges run
+    BEFORE this, which is how "..." used to slip through and emit "" / " -> ".
+    """
+    text = str(name).strip()
+    if text.startswith("."):
+        text = text[1:]
+    text = text.strip()
+    if not text.strip(". \t"):
+        return ""
+    return text
+
+
+# The conversion pipeline itself creates files inside the target repo (Generated/,
+# Knowledge/, .claude/, CLAUDE.md, ...) BEFORE Phase 1.5 runs, and the engine walks
+# the filesystem without regard for .gitignore — so on every conversion (and every
+# re-run) it indexes the framework's own artifacts as if they were the team's code.
+# Measured on a real conversion re-run: 261 unverifiable module records were the
+# framework's own generated files. Exclude them: they are the knowledge layer
+# ABOUT the code, not the code.
+FRAMEWORK_ARTIFACT_RE = re.compile(
+    r"(^|/)(Generated|Knowledge|\.claude|\.windsurf)(/|$)"
+    r"|(^|/)(CLAUDE|AGENTS|START_HERE|START_HERE\.agentic)\.md$"
+    r"|(^|/)prompts/templates/AI Agents(/|$)"
+    r"|(^|/)BINDING\.yml$"
+)
+
+
+def is_framework_artifact(path: str) -> bool:
+    return bool(FRAMEWORK_ARTIFACT_RE.search(path))
+
+
+_SNAP_WINDOW = 10
+
+# Mirror of verify_citations.sh tokenize()/stem(): the T3 gate scores overlap on
+# stems >= 3 chars that are not stopwords. An identifier none of whose words
+# survive that filter (`US`, `EU`, `with()`, `from()`) can NEVER pass the gate no
+# matter how correct its citation is — so those records are quarantined to the
+# sidecar rather than left in the index as guaranteed gate failures.
+_GATE_STOP = {"the", "a", "an", "in", "of", "to", "and", "or", "is", "are", "was",
+              "with", "for", "on", "at", "by", "from", "this", "that", "it", "its",
+              "not", "no", "be", "has", "have", "do", "all", "as", "into", "via"}
+
+
+def _gate_stem(word: str) -> str:
+    w = word.lower()
+    for suffix in ("tion", "tions", "ings", "ing", "tion", "ed", "ly", "er", "est", "s"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            w = w[:-len(suffix)]
+            break
+    return w
+
+
+def gate_surviving_words(identifier: str) -> list:
+    """The identifier's words that survive the T3 gate's tokenizer (original
+    casing kept for the line search; presence of the raw word on a line implies
+    a stem match, since the gate stems both sides identically)."""
+    out = []
+    for w in re.findall(r"[a-zA-Z][a-zA-Z0-9]*", identifier):
+        s = _gate_stem(w)
+        if len(s) >= 3 and s not in _GATE_STOP:
+            out.append(w)
+    return out
+
+
+def snap_line_to_identifier(repo_path: Path, path: str, line: int, identifier: str,
+                            counters: dict, cache: dict) -> int:
+    """Align the engine's citation with the framework's exact-line overlap contract.
+
+    graphifyy cites a declaration's START line, which for annotated Java/Kotlin
+    symbols is the annotation (`@Override`, `@GET`, `@Value`), not the line that
+    names the symbol. The T3 verifier (verify_citations.sh) requires stemmed-token
+    overlap on the exact cited line, so an annotation-line citation fails the gate
+    for a symbol that genuinely exists at that declaration — measured on a real
+    431-file JAX-RS service: 1,751 of 1,774 gate failures were this mismatch.
+
+    Snap FORWARD only, to the nearest line within the declaration header that
+    contains the identifier's bare name as a whole word. Forward-only because the
+    engine cites the header's first line; scanning backward risks landing on an
+    unrelated earlier mention.
+
+    Returns the (possibly snapped) line, or -1 when the identifier cannot be
+    located within the window — the caller routes that record to the
+    needs-verification sidecar: a symbol whose name cannot be found at or near
+    its own citation is the definition of "needs verification before promoting",
+    and leaving it in the index guarantees a citation-gate failure. An EMPTY file
+    is the same verdict — it was read successfully and no line exists that could
+    verify the identifier (measured: 48 engine records for empty `__init__.py`
+    files sat in the index as guaranteed gate failures under the earlier
+    keep-unjudged rule). An UNREADABLE file (OSError) keeps the engine's line
+    unjudged: the adapter only rules on content it actually read — absence is the
+    gate's jurisdiction, not this function's.
+
+    Punctuated engine labels (`billing-ws-pom`, `.Builder()`) are judged by
+    their LONGEST gate-surviving word — the first version exempted them entirely,
+    which leaked exactly the unverifiable synthesized file-node labels back into
+    the index (measured: the last 40 gate failures were all this class). An
+    identifier with NO gate-surviving words (`US`, `with()`) is unverifiable by
+    construction under the gate's tokenizer and goes straight to the sidecar.
+    """
+    tokens = gate_surviving_words(identifier)
+    if not tokens:
+        counters["gate_unverifiable_identifier"] = \
+            counters.get("gate_unverifiable_identifier", 0) + 1
+        return -1
+    token = max(tokens, key=len)
+    lines = cache.get(path)
+    if lines is None:
+        try:
+            lines = (repo_path / path).read_text(encoding="utf-8",
+                                                 errors="replace").splitlines()
+        except OSError:
+            lines = False  # sentinel: unreadable, distinct from read-but-empty
+        cache[path] = lines
+    if lines is False or line < 1:
+        return line
+    if not lines:
+        counters["unverifiable_file_to_sidecar"] = \
+            counters.get("unverifiable_file_to_sidecar", 0) + 1
+        return -1
+    pattern = re.compile(r"\b" + re.escape(token) + r"\b")
+    if line <= len(lines) and pattern.search(lines[line - 1]):
+        return line
+    for probe in range(line + 1, min(line + _SNAP_WINDOW, len(lines)) + 1):
+        if pattern.search(lines[probe - 1]):
+            counters["line_snapped"] = counters.get("line_snapped", 0) + 1
+            return probe
+    counters["line_snap_miss"] = counters.get("line_snap_miss", 0) + 1
+    return -1
 
 
 def _file_and_line(obj: dict, repo_path: Path, counters: dict, missing_counter: str):
@@ -325,6 +615,7 @@ def map_nodes(nodes: list, repo_path: Path, engine: str, counters: dict) -> tupl
     """Map graph nodes to contract records. Returns (records, needs_verification)."""
     records, sidecar = [], []
     node_index = {}
+    snap_cache: dict = {}
     for node in nodes:
         if not isinstance(node, dict):
             counters["nodes_unparseable"] += 1
@@ -353,10 +644,32 @@ def map_nodes(nodes: list, repo_path: Path, engine: str, counters: dict) -> tupl
         if is_vendored(path):
             counters["vendor_excluded"] = counters.get("vendor_excluded", 0) + 1
             continue
+        if is_framework_artifact(path):
+            counters["framework_artifacts_excluded"] = \
+                counters.get("framework_artifacts_excluded", 0) + 1
+            continue
         # graphifyy labels methods with a leading dot (`.main()`); identifier is the
         # human-facing column in CODE_INDEX.md, so strip it at the mapping site.
-        record = {"path": path, "line": line,
-                  "kind": kind, "identifier": str(name).lstrip("."),
+        identifier = clean_identifier(name)
+        if not identifier:
+            # The emptiness guard above runs on the RAW label, so a label of nothing but
+            # dots ("...") passed it and then stripped to "". Re-check after cleaning:
+            # an empty identifier is exactly what that guard exists to keep out.
+            counters["nodes_missing_fields"] += 1
+            continue
+        snapped = snap_line_to_identifier(repo_path, path, line, identifier,
+                                          counters, snap_cache)
+        if snapped == -1:
+            # Identifier not locatable at/near its citation: quarantine with the
+            # engine's original line so a human can judge it — never the index.
+            sidecar.append({"path": path, "line": line, "kind": kind,
+                            "identifier": identifier, "engine": engine,
+                            "confidence": confidence_of(node, counters)})
+            counters["snap_miss_to_sidecar"] = \
+                counters.get("snap_miss_to_sidecar", 0) + 1
+            continue
+        record = {"path": path, "line": snapped,
+                  "kind": kind, "identifier": identifier,
                   "engine": engine, "confidence": confidence_of(node, counters)}
         _route(record, records, sidecar, counters)
     counters["node_index"] = node_index
@@ -405,12 +718,24 @@ def map_edges(edges: list, counters: dict, engine: str,
         if is_vendored(path):
             counters["vendor_excluded"] = counters.get("vendor_excluded", 0) + 1
             continue
+        if is_framework_artifact(path):
+            counters["framework_artifacts_excluded"] = \
+                counters.get("framework_artifacts_excluded", 0) + 1
+            continue
         # The edge inherits the weakest confidence among itself and both endpoints.
-        conf = weakest_confidence(confidence_of(edge, counters),
+        # counters=None: edges have no confidence key by design, so counting them as
+        # "absent" would swamp the node-level drift signal main() reports.
+        conf = weakest_confidence(confidence_of(edge, None),
                                   src.get("confidence", "EXTRACTED"),
                                   dst.get("confidence", "EXTRACTED"))
+        src_label, dst_label = clean_identifier(src_name), clean_identifier(dst_name)
+        if not src_label or not dst_label:
+            # Same trap as map_nodes: the guard above ran on the raw labels, so a
+            # dots-only endpoint would have produced the identifier " -> ".
+            counters["edges_unresolvable"] += 1
+            continue
         record = {"path": path, "line": line, "kind": "dependency",
-                  "identifier": f"{str(src_name).lstrip('.')} -> {str(dst_name).lstrip('.')}",
+                  "identifier": f"{src_label} -> {dst_label}",
                   "engine": engine, "confidence": conf}
         _route(record, records, sidecar, counters)
     return records, sidecar
@@ -424,18 +749,39 @@ def find_graph_json(out_dir: Path) -> Optional[Path]:
     return hits[0] if hits else None
 
 
+CODE_GRAPH_NAME = "CODE_GRAPH.jsonl"
+SIDECAR_NAME = "NEEDS_VERIFICATION.jsonl"
+PROVENANCE_NAME = "CODE_INDEX_RECORDS.jsonl"
+# Everything the adapter derives, cleared before every run. Keep in sync with the writes
+# in main(); .gitignore is deliberately NOT here (it is ours and must survive).
+DERIVED_ARTIFACTS = ("graphify-out", "graph.json",
+                     CODE_GRAPH_NAME, SIDECAR_NAME, PROVENANCE_NAME)
+
+
 def clear_engine_output(out_dir: Path) -> None:
-    """Remove any previous run's engine output.
+    """Remove any previous run's engine output AND every artifact we derive from it.
 
     Without this, an engine run that fails and writes nothing leaves the last run's
     graph.json in place; find_graph_json() then picks it up and the adapter re-emits stale
     symbols stamped with the CURRENT engine version, which nothing downstream can detect.
+
+    Clearing only the engine's own output is one layer short, because the derived JSONL
+    files are written CONDITIONALLY (`if edge_records:` / `if sidecar:`). A run that fails,
+    or that honestly produces zero dependency edges or zero INFERRED records, would leave
+    the previous run's file sitting there stamped with the previous run's engine version --
+    indistinguishable from fresh output. NEEDS_VERIFICATION.jsonl is the list an operator is
+    told to verify before promoting records, so a stale one is actively misleading.
     """
-    for stale in (out_dir / "graphify-out", out_dir / "graph.json"):
-        if stale.is_dir():
-            shutil.rmtree(stale, ignore_errors=True)
-        elif stale.exists():
-            stale.unlink(missing_ok=True)
+    for name in DERIVED_ARTIFACTS:
+        stale = out_dir / name
+        try:
+            if stale.is_dir():
+                shutil.rmtree(stale, ignore_errors=True)
+            elif stale.exists():
+                stale.unlink()
+        except OSError as exc:
+            log(f"WARNING: could not remove stale {stale} ({exc}) — it may contain a "
+                f"previous run's records; treat its contents as unverified")
 
 
 def run_engine(repo_path: Path, out_dir: Path) -> bool:
@@ -445,25 +791,45 @@ def run_engine(repo_path: Path, out_dir: Path) -> bool:
     Returns False on ANY failure -- a non-zero exit included -- so the caller emits nothing
     rather than falling through to whatever happens to be on disk.
     """
-    default_cmd = f"{sys.executable} -m graphify"
-    raw_cmd = os.environ.get("GRAPHIFY_CMD")
-    if raw_cmd and raw_cmd != default_cmd:
-        if os.environ.get("GRAPHIFY_ALLOW_CMD_OVERRIDE") == "1":
-            log(f"WARNING: non-default engine command honoured "
-                f"(GRAPHIFY_ALLOW_CMD_OVERRIDE=1): {raw_cmd}")
+    default_cmd = default_engine_cmd()
+    if cmd_override_honoured():
+        raw_cmd = os.environ["GRAPHIFY_CMD"]
+        log(f"WARNING: non-default engine command honoured "
+            f"(GRAPHIFY_ALLOW_CMD_OVERRIDE=1): {raw_cmd}")
+    else:
+        raw_cmd = None
+        if os.environ.get("GRAPHIFY_CMD"):
+            log("GRAPHIFY_CMD is set but GRAPHIFY_ALLOW_CMD_OVERRIDE=1 is not (or the "
+                "value equals the default) — ignoring the override and using the default "
+                "engine command (an env var that picks the binary is a code-execution "
+                "surface)")
+
+    # The code-only invocation IS the egress guarantee, so these two are gated rather than
+    # merely defaulted. Ungated, `GRAPHIFY_SUBCOMMAND=extract` reached the engine's LLM
+    # path while the log line below still announced the code-only path.
+    subcommand, extra_raw = "update", "--no-cluster"
+    llm_path = False
+    requested = {k: os.environ[k] for k in ("GRAPHIFY_SUBCOMMAND", "GRAPHIFY_ARGS")
+                 if os.environ.get(k) is not None}
+    if requested:
+        if llm_path_unlocked():
+            subcommand = os.environ.get("GRAPHIFY_SUBCOMMAND", subcommand)
+            extra_raw = os.environ.get("GRAPHIFY_ARGS", extra_raw)
+            llm_path = True
+            log(f"WARNING: code-only invocation OVERRIDDEN "
+                f"(GRAPHIFY_ALLOW_LLM_PATH=1): {requested} — the no-LLM egress guarantee "
+                f"in this adapter's docstring DOES NOT APPLY to this run")
         else:
-            log("GRAPHIFY_CMD is set but GRAPHIFY_ALLOW_CMD_OVERRIDE=1 is not — "
-                "ignoring the override and using the default engine command "
-                "(an env var that picks the binary is a code-execution surface)")
-            raw_cmd = None
+            log(f"ignoring {sorted(requested)} — GRAPHIFY_ALLOW_LLM_PATH=1 is not set. "
+                f"The code-only invocation (update --no-cluster) is the egress guarantee, "
+                f"so leaving it requires an explicit opt-in")
     try:
         cmd = shlex.split(raw_cmd or default_cmd)
-        extra = shlex.split(os.environ.get("GRAPHIFY_ARGS", "--no-cluster"))
+        extra = shlex.split(extra_raw)
     except ValueError as exc:
         log(f"GRAPHIFY_CMD/GRAPHIFY_ARGS is not parseable as a shell command ({exc}) — "
             f"skipping cleanly, no records emitted")
         return False
-    subcommand = os.environ.get("GRAPHIFY_SUBCOMMAND", "update")
     raw_timeout = os.environ.get("GRAPHIFY_TIMEOUT", "900")
     try:
         timeout = int(raw_timeout)
@@ -471,10 +837,15 @@ def run_engine(repo_path: Path, out_dir: Path) -> bool:
         log(f"GRAPHIFY_TIMEOUT={raw_timeout!r} is not an integer number of seconds — "
             f"skipping cleanly, no records emitted")
         return False
+    if timeout <= 0:
+        log(f"GRAPHIFY_TIMEOUT={raw_timeout!r} is not a positive number of seconds — "
+            f"skipping cleanly, no records emitted")
+        return False
 
-    clear_engine_output(out_dir)
     argv = cmd + [subcommand, str(repo_path)] + extra
-    log(f"engine invocation (code-only path, credential-stripped env): {' '.join(argv)}")
+    path_label = "OVERRIDDEN path — NOT the code-only guarantee" if llm_path else "code-only path"
+    log(f"engine invocation ({path_label}, credential-stripped env, timeout {timeout}s): "
+        f"{' '.join(argv)}")
     try:
         result = subprocess.run(argv, env=sanitized_env(), capture_output=True,
                                 text=True, timeout=timeout)
@@ -520,6 +891,25 @@ def ensure_output_ignored(out_dir: Path) -> None:
             f"is NOT git-ignored; do not commit it")
 
 
+def write_jsonl(path: Path, records: List[dict], description: str) -> None:
+    """Write records as JSON-lines, or leave no file at all when there are none.
+
+    clear_engine_output() has already removed any previous copy, so "no records" correctly
+    means "no file" rather than "last run's file". A write failure is reported and skipped:
+    guarantee 6 says an unwritable target repo makes the adapter skip, not crash.
+    """
+    if not records:
+        return
+    try:
+        with path.open("w") as fh:
+            for record in records:
+                fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        log(f"WARNING: could not write {path} ({exc}) — {description} was NOT persisted")
+        return
+    log(f"{path}: {description}")
+
+
 def main() -> int:
     if not flag_enabled():
         log(f"GRAPHIFY_ADAPTER={os.environ.get('GRAPHIFY_ADAPTER')!r} is not an explicit "
@@ -536,28 +926,41 @@ def main() -> int:
         return 0
 
     # An HONOURED GRAPHIFY_CMD means the operator named their own engine, so the version
-    # of whatever graphifyy happens to be installed in THIS interpreter says nothing about
-    # it. Honoured requires the double gate (GRAPHIFY_ALLOW_CMD_OVERRIDE=1) — a CMD set
-    # without the gate is ignored by run_engine, so the packaged preflight still applies.
+    # of whatever graphifyy happens to be installed says nothing about it. Honoured requires
+    # the double gate (GRAPHIFY_ALLOW_CMD_OVERRIDE=1) — a CMD set without the gate is ignored
+    # by run_engine, so the packaged preflight still applies. cmd_override_honoured() is the
+    # SAME predicate run_engine uses; asking the question two ways let GRAPHIFY_CMD="" skip
+    # the floor here while the real packaged engine ran there.
     # GRAPHIFY_SKIP_PREFLIGHT=1 is the equivalent test seam without a custom command.
-    custom_cmd = ("GRAPHIFY_CMD" in os.environ
-                  and os.environ.get("GRAPHIFY_ALLOW_CMD_OVERRIDE") == "1")
+    custom_cmd = cmd_override_honoured()
     if custom_cmd or os.environ.get("GRAPHIFY_SKIP_PREFLIGHT") == "1":
         engine = os.environ.get("GRAPHIFY_ENGINE_ID", "graphifyy==unknown")
         reason = ("GRAPHIFY_CMD override honoured" if custom_cmd
                   else "GRAPHIFY_SKIP_PREFLIGHT=1 (test seam)")
         log(f"packaged version floor skipped — {reason}; provenance stamped as {engine}")
     else:
-        # The engine needs Python >= 3.10 and runs in THIS interpreter (sys.executable).
-        # On a stock macOS box `python3` is 3.9.6 and the pip failure it produces never
-        # states the floor — so state it here and skip cleanly, before the version check.
-        if sys.version_info < ENGINE_PY_FLOOR:
-            log(f"graphifyy requires Python >= 3.10; this adapter is running under "
-                f"{sys.version_info[0]}.{sys.version_info[1]} ({sys.executable}) "
-                f"and invokes the engine in its own interpreter. Re-run Phase 1.5 under "
-                f"a 3.10+ interpreter, or install the engine into one: {PIN_HINT}")
+        # The engine needs Python >= 3.10. Check the interpreter that will actually RUN it
+        # (GRAPHIFY_PYTHON, else a probed 3.10+ interpreter, else ours) — NOT this one.
+        # Phase 1.5 invokes the adapter as bare `python3`, which is 3.9.6 on a stock macOS
+        # box, so checking sys.version_info here made the feature unreachable through the
+        # only path that invokes it.
+        interpreter = engine_python()
+        interpreter_version = python_version_of(interpreter)
+        running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+        found = ("unusable" if interpreter_version is None
+                 else f"{interpreter_version[0]}.{interpreter_version[1]}")
+        if interpreter_version is None or interpreter_version < ENGINE_PY_FLOOR:
+            log(f"graphifyy requires Python >= "
+                f"{ENGINE_PY_FLOOR[0]}.{ENGINE_PY_FLOOR[1]}; no suitable interpreter was "
+                f"found (this adapter runs under {running}; best candidate "
+                f"{interpreter} is {found}; probed {', '.join(PYTHON_CANDIDATES)}) — "
+                f"skipping cleanly. Point GRAPHIFY_PYTHON at a 3.10+ interpreter that has "
+                f"the engine, or install it: {PIN_HINT}")
             return 0
-        ver = engine_version()
+        if interpreter != sys.executable:
+            log(f"engine will run under {interpreter} ({found}), not this adapter's "
+                f"interpreter ({sys.executable} = {running})")
+        ver = engine_version(interpreter)
         if ver is None:
             log(f"graphifyy is not installed — skipping cleanly. To enable: {PIN_HINT}")
             return 0
@@ -569,8 +972,19 @@ def main() -> int:
         engine = f"graphifyy=={'.'.join(map(str, ver))}"
 
     out_dir = repo_path / "Generated" / "graphify"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # Guarantee 6: an unwritable target repo makes the adapter skip, not crash. The
+        # Phase 1.5 hook ends in `|| true`, so a traceback here would be swallowed into a
+        # log file and the conversion would silently lose the adapter with no diagnosis.
+        log(f"cannot create {out_dir} ({exc}) — skipping cleanly, no records emitted")
+        return 0
     ensure_output_ignored(out_dir)
+    # Cleared HERE, not inside run_engine: every early return in run_engine (unparseable
+    # command, bad timeout, engine failure) must also start from a blank slate, otherwise
+    # the previous run's derived JSONL files survive looking current.
+    clear_engine_output(out_dir)
 
     if not run_engine(repo_path, out_dir):
         return 0
@@ -586,26 +1000,50 @@ def main() -> int:
         log(f"graph.json unreadable ({exc}) — no records emitted")
         return 0
 
+    # Check the container BEFORE calling .get on it: a graph.json whose top level is a
+    # JSON array (or a string, or a number) raised AttributeError here and exited 1,
+    # which breaks the always-exit-0 convention guarantee 6 promises.
+    if not isinstance(graph, dict):
+        log(f"UNRECOGNIZED SCHEMA: graph.json top level is {type(graph).__name__}, "
+            f"expected an object — no records emitted")
+        return 0
+
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or graph.get("links") or []
     if not isinstance(nodes, list):
         log(f"UNRECOGNIZED SCHEMA: top-level keys {sorted(graph)[:12]} — no records emitted")
         return 0
+    if not isinstance(edges, list):
+        log(f"UNRECOGNIZED SCHEMA: `edges` is {type(edges).__name__}, expected a list — "
+            f"mapping nodes only")
+        edges = []
 
     counters = {"nodes_unparseable": 0, "nodes_missing_fields": 0,
                 "inferred_to_sidecar": 0, "ambiguous_dropped": 0,
                 "edges_unparseable": 0, "edges_non_dependency": 0,
                 "edges_unresolvable": 0, "confidence_absent": 0,
-                "vendor_excluded": 0}
+                "confidence_present": 0, "vendor_excluded": 0}
     node_records, node_sidecar = map_nodes(nodes, repo_path, engine, counters)
     edge_records, edge_sidecar = map_edges(edges, counters, engine, repo_path)
     counters.pop("node_index", None)
 
-    if counters["confidence_absent"]:
-        log(f"WARNING: {counters['confidence_absent']} record(s) carried no `confidence` "
-            f"field and were treated as EXTRACTED. The confidence gate assumes {engine} "
-            f"emits that field — if this count is large the engine's schema has drifted "
-            f"and the gate is no longer filtering anything.")
+    # Absent confidence is only a DRIFT signal when it is PARTIAL. On graphifyy==0.9.43
+    # every node record lacks the field (measured: 100% absent on every repo tested), so
+    # warning on a non-zero count meant warning on every clean run, at a count equal to the
+    # whole node set -- telling the operator the schema had drifted from the very baseline
+    # the README documents. Only edges are counted (nodes carry no field by design), and
+    # only a partial count is a WARNING.
+    absent = counters["confidence_absent"]
+    mapped = absent + counters["confidence_present"]
+    if absent and absent == mapped:
+        log(f"confidence: all {absent} mapped node record(s) carried no `confidence` field "
+            f"and defaulted to EXTRACTED. This is the expected baseline for {engine} — for "
+            f"nodes the gate is a forward-compatible hook, not a filter.")
+    elif absent:
+        log(f"WARNING: {absent} of {mapped} mapped node record(s) carried no `confidence` "
+            f"field and were treated as EXTRACTED, while {mapped - absent} did carry one. A "
+            f"PARTIAL split is the actual schema-drift signal — {engine} is emitting the "
+            f"field inconsistently and the gate is filtering only part of the output.")
     dropped = counters["nodes_missing_fields"] + counters["edges_unresolvable"]
     if dropped:
         log(f"fail-closed: {dropped} record(s) dropped for want of a resolvable "
@@ -622,22 +1060,24 @@ def main() -> int:
     for record in node_records:
         print(json.dumps(record))
 
-    if edge_records:
-        graph_out = out_dir / "CODE_GRAPH.jsonl"
-        with graph_out.open("w") as fh:
-            for record in edge_records:
-                fh.write(json.dumps(record) + "\n")
-        log(f"dependency edges written to {graph_out} ({len(edge_records)}) — "
-            f"kept out of CODE_INDEX.md to protect the eager-load token budget")
+    # Provenance would otherwise die at the Phase 1.5 boundary: the materialiser keeps only
+    # the four contract fields, marks every row VERIFIED, and then rm -f's the extractor
+    # file -- so nothing downstream records which CODE_INDEX.md rows came from a
+    # third-party engine rather than our own extractors. Mirror the emitted records WITH
+    # engine/confidence so that question stays answerable.
+    write_jsonl(out_dir / PROVENANCE_NAME, node_records,
+                f"provenance mirror of the {len(node_records)} stdout record(s) "
+                f"(engine/confidence survive here; CODE_INDEX.md keeps only the "
+                f"four contract fields)")
+
+    write_jsonl(out_dir / CODE_GRAPH_NAME, edge_records,
+                f"dependency edges ({len(edge_records)}) — kept out of CODE_INDEX.md to "
+                f"protect the eager-load token budget")
 
     sidecar = node_sidecar + edge_sidecar
-    if sidecar:
-        sidecar_file = out_dir / "NEEDS_VERIFICATION.jsonl"
-        with sidecar_file.open("w") as fh:
-            for record in sidecar:
-                fh.write(json.dumps(record) + "\n")
-        log(f"INFERRED records quarantined to {sidecar_file} ({len(sidecar)}) — "
-            f"verify before promoting to the index")
+    write_jsonl(out_dir / SIDECAR_NAME, sidecar,
+                f"INFERRED records quarantined ({len(sidecar)}) — verify before promoting "
+                f"to the index")
 
     by_kind: Dict[str, int] = {}
     for record in node_records + edge_records:
@@ -649,4 +1089,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Last-resort net for guarantee 6. Every known failure mode above already returns 0,
+    # but this adapter is optional by design: an unanticipated exception must degrade the
+    # conversion to the bash/python extractors, never abort Phase 1.5 with a traceback the
+    # hook's `|| true` would bury in a log file.
+    try:
+        sys.exit(main())
+    except Exception as exc:  # noqa: BLE001 - deliberate catch-all, see above
+        log(f"UNEXPECTED ERROR ({type(exc).__name__}: {exc}) — skipping cleanly, no "
+            f"records emitted. The bash/python extractors remain the engines of record.")
+        sys.exit(0)

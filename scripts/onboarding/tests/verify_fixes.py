@@ -1,5 +1,5 @@
 """
-verify_fixes.py — standalone verification of the code-review fixes.
+verify_fixes.py — standalone verification of the the framework spec code-review fixes.
 Requires no external packages (no pytest dependency).
 Run with: python3 scripts/onboarding/tests/verify_fixes.py
 """
@@ -117,7 +117,7 @@ check("Different schema explicitly noted for git ownership",
       "different" in readme.lower())
 
 # ── 6. Phase 1.5 CODE_INDEX.md build present in REPO_ONBOARDING_AGENT.md ─────
-print("\n[6] Phase 1.5: CODE_INDEX.md build and extractor wiring")
+print("\n[6] Phase 1.5: CODE_INDEX.md build and extractor wiring (framework spec)")
 agent_md = Path(SCRIPTS_DIR / "../../prompts/templates/AI Agents/REPO_ONBOARDING_AGENT.md").read_text()
 check("write_or_merge_code_index helper call removed",
       "write_or_merge_code_index" not in agent_md)

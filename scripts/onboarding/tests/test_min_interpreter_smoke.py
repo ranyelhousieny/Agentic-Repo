@@ -7,12 +7,12 @@ declared minimum interpreter versions:
   python3 3.9+  (for all .py scripts and the embedded Python heredoc in verify_citations.sh)
   bash 3.2+     (for all .sh scripts)
 
-Architecture notes:
+Architecture notes (framework spec):
   - The smoke test MUST discover a real python3.9 interpreter (via PYTHON39 env var,
     PATH search, or known pyenv/homebrew locations) and pytest.skip when it is absent.
     It must NEVER fall back to sys.executable — doing so reproduces the exact failure mode
     (test passes under Python 3.12+, defect ships to Python 3.9) that this test exists to
-    catch.  See the load-bearing constraint below.
+    catch.  See load-bearing constraint in the framework spec.
 
   - For bash, the test uses the system /bin/bash.  On macOS, /bin/bash is bash 3.2
     (Apple's GPL2 freeze).  On Linux, /bin/bash is typically 4.x or 5.x, but the scripts
@@ -79,7 +79,7 @@ def _find_python39() -> str | None:
     """
     Return the path to a Python 3.9 interpreter, or None if not found.
 
-    Discovery strategy:
+    Discovery strategy (framework spec):
       Priority order:
         1. PYTHON39 environment variable — accept only if it reports version (3, 9).
            Fail loudly (assert) if it reports something else, so the operator knows
@@ -188,7 +188,7 @@ def _make_minimal_code_index(tmp_path: Path) -> Path:
     body (where the def-time TypeError was) we must pass a real artifact path and a
     real REPO_PATH so the heredoc actually executes.
 
-    A CODE_INDEX.md with zero citations triggers Empty-artifact guard (exit 1) but that happens inside
+    A CODE_INDEX.md with zero citations triggers B5 (exit 1) but that happens inside
     the Python body — which proves the body compiled and executed.  We use
     --min-citations 0 to get a clean exit-0 for the smoke test.
     """
@@ -208,12 +208,12 @@ def test_verify_citations_compiles_under_python39(tmp_path: Path) -> None:
     The embedded Python body in verify_citations.sh must compile and execute
     under Python 3.9 without a TypeError at def-time.
 
-    Regression test: `Path | None` at line 311 caused a
+    This is the regression test for the framework spec: `Path | None` at line 311 caused a
     TypeError under Python 3.9 because `|` as a union operator on types is PEP 604
     (Python 3.10+).  The fix (`Optional[Path]`) is verified here.
 
     We pass a real minimal artifact so the python3 heredoc actually executes;
-    --min-citations 0 suppresses the Empty-artifact guard exit-1 for a zero-citation artifact.
+    --min-citations 0 suppresses the B5 exit-1 for a zero-citation artifact.
     """
     artifact = _make_minimal_code_index(tmp_path)
     verify_sh = SCRIPTS_DIR / "verify_citations.sh"
@@ -239,7 +239,7 @@ def test_verify_citations_compiles_under_python39(tmp_path: Path) -> None:
 
     assert result.returncode == 0, (
         f"verify_citations.sh crashed under Python 3.9 (returncode={result.returncode}).\n"
-        f"Regression check: look for 'Path | None' (PEP 604) annotations "
+        f"This is the framework-spec regression: check for 'Path | None' (PEP 604) annotations "
         f"in the embedded Python body — replace with Optional[Path] from typing.\n"
         f"stderr: {result.stderr}\n"
         f"stdout: {result.stdout}"
@@ -286,6 +286,33 @@ def test_merge_sme_contacts_compiles_under_python39(tmp_path: Path) -> None:
     )
 
 
+# ─── Python 3.9 smoke: readiness_report.py ───────────────────────────────────
+
+@_SKIP_PYTHON39
+def test_readiness_report_compiles_under_python39(tmp_path: Path) -> None:
+    """readiness_report.py must compile and run --stdout under Python 3.9.
+
+    py_compile (test_no_match_case_in_py_scripts below) only proves the file
+    parses; it never executes os.walk / Path.glob / stat, so a runtime-only 3.9
+    regression would ship. Every other .py script in this directory carries an
+    execute-it smoke test for that reason.
+    """
+    result = _run(
+        [PYTHON39, str(SCRIPTS_DIR / "readiness_report.py"), str(tmp_path), "--stdout"],
+    )
+    assert result.returncode == 0, (
+        f"readiness_report.py crashed under Python 3.9.\n"
+        f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    )
+    assert "# Agent Readiness Report" in result.stdout, (
+        f"Expected the rendered report on stdout; got:\n{result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
+    assert "TypeError" not in result.stderr, (
+        f"TypeError in readiness_report.py under Python 3.9: {result.stderr}"
+    )
+
+
 # ─── Bash 3.2 compatibility smoke tests ──────────────────────────────────────
 #
 # On most Linux CI environments /bin/bash is 4.x or 5.x.  These tests run the
@@ -314,7 +341,7 @@ def test_extract_express_syntax_check(tmp_path: Path) -> None:
 @_SKIP_BASH
 def test_extract_express_path_with_space(tmp_path: Path) -> None:
     """
-    Regression: extract_express.sh must emit a non-zero record count
+    framework-spec regression: extract_express.sh must emit a non-zero record count
     from a repo whose path contains a space.
 
     Before the SRC_DIRS array fix, $SRC_DIRS (a space-separated string) was
@@ -413,13 +440,13 @@ def test_extract_git_ownership_syntax_check(tmp_path: Path) -> None:
 def test_no_pep604_union_in_heredoc(tmp_path: Path) -> None:
     """
     No PEP-604 (X | Y) type annotation may exist in verify_citations.sh's embedded
-    Python body.  This is the root-cause test for the original interpreter crash.
+    Python body.  This is the root-cause test for the original the framework spec crash.
 
     Method: run the full script under Python 3.9 with a minimal fixture and assert
     exit 0 (done by test_verify_citations_compiles_under_python39 above).  Additionally,
     run a direct Python compile of a snippet that would crash on 3.9 if the bug recurs.
 
-    The canary uses a multi-line -c string with an embedded newline so
+    framework-spec fix: the canary uses a multi-line -c string with an embedded newline so
     `def f() -> Path | None:` is a proper function definition — NOT joined with `;`
     which is a SyntaxError on every Python version regardless of PEP-604 support.
     """

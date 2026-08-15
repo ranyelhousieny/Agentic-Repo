@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify_citations.sh — Citation resolver and hard gate
+# verify_citations.sh — Citation resolver and hard gate (T3)
 #
 # Usage:
 #   bash scripts/onboarding/verify_citations.sh <ARTIFACT_FILE> [REPO_PATH] [OPTIONS]
@@ -45,10 +45,10 @@
 #     These three guards together ensure "Phase 1.5.2:100" or "v1.2.3:45" in
 #     prose never triggers the hard gate.
 #
-#   Also checks for FORBIDDEN_PHRASES in generated agent files:
+#   Also checks for FORBIDDEN_PHRASES in generated agent files (T5):
 #     probably, likely, typically, should, generally
 #
-#   Emits VALIDATION_SUMMARY.md as a byproduct.
+#   Emits VALIDATION_SUMMARY.md (T6) as a byproduct.
 #
 # Exit codes:
 #   0  — all citations resolve with sufficient overlap (or are NOT_FOUND rows)
@@ -65,7 +65,7 @@
 #   --min-citations N Minimum expected citation count (default: 1 for citation-bearing
 #                    artifacts, 0 for all others). Exit 1 when count < N.
 #
-# Env-var parsing: never `cut -d'=' -f2` (truncates values containing `=`); always f2-.
+# Rule 11 compliance: no cut -d'=' -f2 usage; all env-var parsing uses f2-.
 # Exit 1 on citation failure (hard gate); exit 0 on success.
 #
 # Requires: bash 3.2+, python3 3.9+, awk, grep, sed
@@ -107,7 +107,7 @@ done
 if [[ -z "$SUMMARY_PATH" ]]; then
   # Default to caller's CWD, NOT alongside the artifact.
   # Writing next to the artifact contaminates read-only fixture directories
-  # (e.g. a vendored reference repo) and is out of scope for this gate.
+  # (e.g. a shared fixture checkout) and violates the ticket's Out-of-scope constraint.
   # REPO_ONBOARDING_AGENT.md Step 15 already passes --summary-path explicitly,
   # so this default change leaves the documented production flow unchanged.
   SUMMARY_PATH="$(pwd)/VALIDATION_SUMMARY.md"
@@ -121,12 +121,12 @@ Citation resolver — reads artifact, extracts citations, verifies overlap,
 writes VALIDATION_SUMMARY.md, exits 0/1.
 
 Fixes implemented:
-  Claim derivation  — claim derived from Field+Value cells, never from citation text itself.
+  B2  — claim derived from Field+Value cells, never from citation text itself.
         For standalone **SOURCE:** lines, walk back to nearest non-citation content.
-  SHA pinning  — SHA pinning via --sha flag: `git -C REPO show SHA:PATH` into tempfile.
-  NOT_FOUND exemption  — NOT_FOUND exemption via exact Status-column match, not substring anywhere.
-  Empty-artifact guard  — Zero-citation exit-1 for citation-bearing artifact names.
-  Argument validation  — Overlap denominator = claim tokens (already claim-normalised); cited-line
+  B3  — SHA pinning via --sha flag: `git -C REPO show SHA:PATH` into tempfile.
+  B4  — NOT_FOUND exemption via exact Status-column match, not substring anywhere.
+  B5  — Zero-citation exit-1 for citation-bearing artifact names.
+  B6  — Overlap denominator = claim tokens (already claim-normalised); cited-line
         span capped at MAX_CITED_SPAN (40) lines; --threshold 0 and >1 rejected.
 """
 import json
@@ -147,7 +147,7 @@ summary_path   = Path(sys.argv[5])
 sha_pin        = sys.argv[6]       # "" means working-tree
 min_citations_arg = sys.argv[7]   # "-1" means heuristic
 
-# ── Argument validation: validate --threshold ──────────────────────────────────────────────────
+# ── B6: validate --threshold ──────────────────────────────────────────────────
 try:
     threshold = float(threshold_str)
 except ValueError:
@@ -162,7 +162,7 @@ if threshold <= 0 or threshold > 1:
     )
     sys.exit(1)
 
-# ── cap cited-line span ───────────────────────────────────────────────────
+# ── B6: cap cited-line span ───────────────────────────────────────────────────
 MAX_CITED_SPAN = 40
 
 # ── Stemmer: crude but fast Porter-style stem ────────────────────────────────
@@ -187,7 +187,7 @@ def tokenize(text: str) -> set:
             tokens.add(w)
     return tokens
 
-# ── Claim derivation: derive claim from Field+Value cells, never from citation text ─────────
+# ── B2: derive claim from Field+Value cells, never from citation text ─────────
 #
 # Strategy:
 #  1. If the row is a pipe-delimited table row (| c1 | c2 | ... |), extract
@@ -253,7 +253,7 @@ def extract_claim_from_row(row: str) -> str:
     return claim.strip()
 
 
-# ── NOT_FOUND exemption: NOT_FOUND detection via exact Status-column match ────────────────────
+# ── B4: NOT_FOUND detection via exact Status-column match ────────────────────
 #
 # A row is NOT_FOUND-exempt ONLY when the Status column (the last |cell| in the
 # table row) exactly equals NOT_FOUND (case-insensitive).
@@ -302,7 +302,7 @@ _FILE_EXT_RE = re.compile(
 # A version-like token: optional 'v', then digits.digits or digits.digits.digits
 _VERSION_RE = re.compile(r"^v?\d+\.\d+(\.\d+)*$")
 
-# ── Forbidden phrases ───────────────────────────────────────────────────
+# ── Forbidden phrases (T5) ───────────────────────────────────────────────────
 FORBIDDEN_PHRASES = [
     "probably", "likely", "typically", "generally",
 ]
@@ -311,7 +311,7 @@ FORBIDDEN_PHRASES = [
 artifact_text = artifact_file.read_text(encoding="utf-8", errors="replace")
 artifact_lines = artifact_text.splitlines()
 
-# ── SHA pinning helper ────────────────────────────────────────────────────────
+# ── B3: SHA pinning helper ────────────────────────────────────────────────────
 _sha_tempfiles = {}  # cache: cited_path_str → tempfile path
 
 def resolve_cited_file(cite_path_str: str) -> Optional[Path]:
@@ -398,7 +398,7 @@ citations = []  # list of dicts
 
 # Preceding-block accumulator for SOURCE-line claim fallback.
 #
-# The root cause of the 0.0-for-all-failures signature:
+# The root cause of the 0.0-for-all-failures signature Rany observed:
 #   - A standalone **SOURCE:** line has no claim of its own (extract_claim_from_row
 #     returns "").
 #   - The old code kept only `last_non_citation_line = claim_text` — a single line.
@@ -418,11 +418,11 @@ citations = []  # list of dicts
 #
 # Why two variables?
 #   The structure is:
-#       **Recommendation:** REUSE the catalogue search index   <- prose
-#       - Adopt the inverted index over title/author           <- prose
-#       - Keep cursor pagination for search results            <- prose
-#                                                              <- blank line → boundary, resets block
-#       **SOURCE:** source_line_claim_pair_source.md:31-60
+#       **Recommendation:** REUSE Terraform modules   <- prose
+#       - Adapt MS Terraform modules                  <- prose
+#       - Use same state management                   <- prose
+#                                                     <- blank line → boundary, resets block
+#       **SOURCE:** MS_Current_System_Architecture.md:750-800
 #
 #   The blank line fires BEFORE the SOURCE line, so _prose_block is [] when we
 #   hit the SOURCE line.  We need the block that was completed *just before* the
@@ -432,10 +432,10 @@ _prose_block: list = []
 _prose_fallback: str = ""
 
 for lineno, row in enumerate(artifact_lines, start=1):
-    # NOT_FOUND exemption: exact Status-column match for NOT_FOUND
+    # B4: exact Status-column match for NOT_FOUND
     not_found = is_not_found_row(row)
 
-    # Claim derivation: extract claim (Field+Value cells; "" for standalone SOURCE lines)
+    # B2: extract claim (Field+Value cells; "" for standalone SOURCE lines)
     claim_text = extract_claim_from_row(row)
 
     # ── Update preceding-block accumulator ───────────────────────────────────
@@ -479,7 +479,7 @@ for lineno, row in enumerate(artifact_lines, start=1):
         except ValueError:
             continue
 
-        # Claim derivation: use claim_text; for SOURCE-only lines fall back to the preceding BLOCK.
+        # B2: use claim_text; for SOURCE-only lines fall back to the preceding BLOCK.
         # Fallback priority:
         #   1. claim_text (non-empty for table rows and non-SOURCE prose)
         #   2. _prose_block joined (SOURCE line sits inside a block, e.g. inline after prose)
@@ -502,7 +502,7 @@ for lineno, row in enumerate(artifact_lines, start=1):
             "is_not_found": not_found,
         })
 
-# ── Empty-artifact guard: zero-citation guard ───────────────────────────────────────────────────
+# ── B5: zero-citation guard ───────────────────────────────────────────────────
 CITATION_BEARING_NAMES = {"CODE_INDEX.md", "VALIDATION_SUMMARY.md", "PHASE1_DETECTION.md"}
 
 total = len(citations)
@@ -543,7 +543,7 @@ for c in citations:
         continue
 
     line_start = max(1, c["line_start"])
-    # Argument validation: cap span at MAX_CITED_SPAN lines
+    # B6: cap span at MAX_CITED_SPAN lines
     line_end = min(len(file_lines), c["line_end"])
     line_end = min(line_end, line_start + MAX_CITED_SPAN - 1)
 
@@ -554,7 +554,7 @@ for c in citations:
 
     cited_content = "\n".join(file_lines[line_start - 1:line_end])
 
-    # Claim derivation: compute overlap using claim_text (Field+Value), not the full row
+    # B2: compute overlap using claim_text (Field+Value), not the full row
     claim_tokens = tokenize(c["claim_text"])
     cited_tokens = tokenize(cited_content)
 
@@ -639,7 +639,7 @@ if failed:
 
 if forbidden_hits:
     summary_lines += [
-        "## Forbidden Phrase Hits",
+        "## Forbidden Phrase Hits (T5)",
         "",
         "| Line | Phrase | Row |",
         "|------|--------|-----|",

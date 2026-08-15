@@ -15,7 +15,7 @@
 #   test_location — test source root / test class
 #
 # Fail-closed: entries without a verifiable file:line are SILENTLY DROPPED.
-# All env-var parsing uses `cut -d'=' -f2-` so values containing `=` are not truncated.
+# All env-var parsing uses `cut -d'=' -f2-` per Rule 11 (TOKEN TRUNCATION BUG).
 # Exit 0 always (non-fatal extraction errors are swallowed; partial output is valid).
 #
 # JSON serialization: all emit() calls delegate to python3 json.dumps so that
@@ -26,10 +26,11 @@
 
 set -euo pipefail
 REPO_PATH="${1:?Usage: extract_spring_boot.sh <REPO_PATH> [SRC_ROOTS...]}"
+REPO_PATH_RAW="$REPO_PATH"
 REPO_PATH="$(realpath "$REPO_PATH")"
 shift || true
 
-# ── Resolve source scan roots (No-src/ repos fix) ──────────────────────────────────────
+# ── Resolve source scan roots (B16 fix) ──────────────────────────────────────
 # Build SRC_DIR: directory to scan for .java/.kt source files.
 # Priority order:
 #   1. Explicit SRC_ROOTS passed as extra arguments (from PHASE1_DETECTION.md)
@@ -62,18 +63,31 @@ print(json.dumps({'path': p, 'line': line_int, 'kind': k, 'identifier': i}))
 " "$p" "$l" "$k" "$id" 2>/dev/null || true
 }
 
-rel() { echo "${1#"$REPO_PATH/"}"; }
+# Strip both the given prefix and the physically-resolved one: on macOS /tmp is a
+# symlink to /private/tmp, and a caller-passed SRC_DIR can surface either form —
+# an absolute path that survives into a record is unverifiable by the T3 gate.
+REPO_REALPATH="$(cd "$REPO_PATH" 2>/dev/null && pwd -P || true)"
+rel() { local p="$1"; p="${p#"$REPO_PATH/"}"; p="${p#"$REPO_REALPATH/"}"; [[ -n "$REPO_PATH_RAW" ]] && p="${p#"$REPO_PATH_RAW/"}"; echo "$p"; }
 
 # ── modules ──────────────────────────────────────────────────────────────────
 # Each pom.xml that isn't the root signals a Maven sub-module
 while IFS= read -r f; do
   dir="$(dirname "$f")"
   module_name="$(basename "$dir")"
-  emit "$(rel "$f")" 1 "module" "$module_name"
+  # Cite the <artifactId> line, not line 1 (an XML prolog carries no identifier
+  # tokens, so a :1 citation always fails the T3 overlap gate); the artifactId
+  # value IS the Maven module name, so prefer it as the identifier.
+  aid_line=$(grep -n "<artifactId>" "$f" 2>/dev/null | head -1 | cut -d: -f1 || true)
+  aid=$(grep -o "<artifactId>[^<]*</artifactId>" "$f" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' || true)
+  emit "$(rel "$f")" "${aid_line:-1}" "module" "${aid:-$module_name}"
 done < <(find "$REPO_PATH" -name "pom.xml" ! -path "$REPO_PATH/pom.xml" 2>/dev/null)
 
 # Root pom.xml is always the top-level module
-[[ -f "$REPO_PATH/pom.xml" ]] && emit "pom.xml" 1 "module" "root"
+if [[ -f "$REPO_PATH/pom.xml" ]]; then
+  aid_line=$(grep -n "<artifactId>" "$REPO_PATH/pom.xml" 2>/dev/null | head -1 | cut -d: -f1 || true)
+  aid=$(grep -o "<artifactId>[^<]*</artifactId>" "$REPO_PATH/pom.xml" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' || true)
+  emit "pom.xml" "${aid_line:-1}" "module" "${aid:-root}"
+fi
 
 # ── entry points (@SpringBootApplication) ────────────────────────────────────
 while IFS= read -r match; do
@@ -131,7 +145,10 @@ while IFS= read -r match; do
   f="${match%%:*}"; rest="${match#*:}"; l="${rest%%:*}"; content="${rest#*:}"
   [[ -z "$f" || -z "$l" ]] && continue
   key=$(echo "$content" | grep -oE '\$\{[^}]+\}' | head -1 || true)
-  [[ -z "$key" ]] && key="(inline)"
+  # No ${...} key means this is not a Spring config injection at all — on repos
+  # using lombok, @Value is lombok.Value on classes, and emitting "(inline)"
+  # for it produced unverifiable noise records (identifier matches nothing).
+  [[ -z "$key" ]] && continue
   emit "$(rel "$f")" "$l" "config" "$key"
 done < <(grep -rn "@Value" "$SRC_DIR/" \
           --include="*.java" --include="*.kt" \
@@ -198,8 +215,14 @@ done
 # Emit one entry per test directory root rather than every test file
 while IFS= read -r f; do
   [[ -f "$f" ]] || continue
-  l=$(grep -n "@Test\|@SpringBootTest\|@ExtendWith" "$f" 2>/dev/null | head -1 | cut -d: -f1 || echo "1")
-  emit "$(rel "$f")" "${l:-1}" "test_location" "$(basename "${f%.java}")"
+  b="$(basename "$f")"; b="${b%.java}"; b="${b%.kt}"
+  # The identifier IS the class name, so cite the declaration line first — an
+  # annotation line (@Test, @ExtendWith(PactConsumerTestExt.class), ...) does not
+  # carry the class name and always fails the T3 overlap gate. Annotation hits are
+  # only a fallback for files whose declaration grep misses.
+  l=$(grep -n "class ${b}\|object ${b}\|interface ${b}" "$f" 2>/dev/null | head -1 | cut -d: -f1 || true)
+  if [[ -z "$l" ]]; then l=$(grep -n "@Test\|@SpringBootTest\|@ExtendWith" "$f" 2>/dev/null | head -1 | cut -d: -f1 || true); fi
+  emit "$(rel "$f")" "${l:-1}" "test_location" "$b"
 done < <(find "$REPO_PATH" -path "*/test*" \
           \( -name "*.java" -o -name "*.kt" \) 2>/dev/null | head -50)
 

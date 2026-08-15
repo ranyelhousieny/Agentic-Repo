@@ -1,22 +1,37 @@
 """
 tests/test_graphify_adapter.py — Tests for the optional Graphify adapter.
 
-The adapter is flag-gated (GRAPHIFY_ADAPTER) and must NEVER be load-bearing:
-  1. Flag off (default): clean skip, exit 0, zero stdout records.
-  2. Flag on, engine not installed: clean skip, exit 0, zero stdout records.
+Installing the engine is the opt-in, so the adapter is ON by default and
+GRAPHIFY_ADAPTER is a kill switch that fails CLOSED. It must NEVER be load-bearing:
+  1. Flag set to a non-affirmative (e.g. `0`, `disabled`, or a typo): clean skip,
+     exit 0, zero stdout records. Unset means ENABLED, and an affirmative
+     (`1`/`true`/`yes`/`on`, any case, surrounding whitespace ignored) also enables.
+  2. Flag on, engine not installed — or no interpreter at the engine's Python
+     floor: clean skip, exit 0, zero stdout records.
   3. Mapper: graph nodes/edges -> contract records {path, line, kind, identifier}
      with additive {engine, confidence}; INFERRED -> sidecar; AMBIGUOUS -> dropped;
      unknown kinds counted, never emitted.
-  4. Credential env sanitization strips every provider variable.
+  4. Credential env sanitization strips provider prefixes, a credential-shaped
+     suffix regex, and an exact-name denylist (SSH_AUTH_SOCK, proxies, NETRC,
+     bare API_KEY). It is best-effort defence in depth, NOT the egress guarantee --
+     $HOME-file credentials stay reachable and there is no network sandbox. The
+     gated code-only invocation (item 5) is what the posture rests on.
+  5. The code-only invocation is GATED, not merely defaulted: GRAPHIFY_SUBCOMMAND
+     and GRAPHIFY_ARGS are ignored unless GRAPHIFY_ALLOW_LLM_PATH=1, and when the
+     gate is set the log withdraws the code-only claim for that run.
+  6. Always exits 0 -- malformed env, an unwritable repo, and a graph.json that is
+     not an object all skip cleanly rather than raising.
 
-Mapper tests import the module directly (no graphifyy install required), so this
-file runs green on any machine — the removal drill, continuously proven.
+Mapper tests import the module directly (no graphifyy install required), and the
+end-to-end tests drive a stub engine through an explicitly gated GRAPHIFY_CMD, so
+this file runs green on any machine — the removal drill, continuously proven.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +47,13 @@ spec.loader.exec_module(adapter)
 
 
 def run_adapter(repo_path: Path, env_overrides: dict) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if k != "GRAPHIFY_ADAPTER"}
+    # Drop the whole GRAPHIFY_ namespace, not just GRAPHIFY_ADAPTER. With the double gates
+    # an exported knob from the developer's shell changes outcomes rather than just being
+    # untidy: GRAPHIFY_ALLOW_CMD_OVERRIDE=1 makes test_cmd_override_ignored_without_allow_gate
+    # assert the opposite of what it means, and GRAPHIFY_ALLOW_LLM_PATH=1 does the same to
+    # the code-only gate tests. The person most likely to have those exported is whoever is
+    # working on the adapter.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GRAPHIFY_")}
     env.update(env_overrides)
     return subprocess.run(
         [sys.executable, str(ADAPTER), str(repo_path)],
@@ -52,6 +73,23 @@ def stub_env(stub_cmd: str, **extra) -> dict:
            "GRAPHIFY_ALLOW_CMD_OVERRIDE": "1"}
     env.update(extra)
     return env
+
+
+def write_stub_engine(tmp_path: Path, records_json: str = "{}") -> str:
+    """A stub engine that accepts ANY subcommand and writes `records_json` as the graph.
+
+    Deliberately does not assert on argv[1]: tests that exercise the LLM-path gate need to
+    drive a non-`update` subcommand, and the invocation itself is asserted from the
+    adapter's own "engine invocation" log line rather than from inside the stub.
+    """
+    stub = tmp_path / "stub_engine_any.py"
+    stub.write_text(
+        "import json,sys,pathlib\n"
+        "out = pathlib.Path(sys.argv[2]) / 'graphify-out'\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        f"(out/'graph.json').write_text({records_json!r})\n"
+    )
+    return f"{sys.executable} {stub}"
 
 
 # ─── flag gate ──────────────────────────────────────────────────────────────
@@ -182,7 +220,7 @@ def test_map_nodes_contract_shape(tmp_path):
 
 
 def test_map_nodes_absolute_paths_become_relative(tmp_path):
-    nodes = [{"id": 1, "name": "f", "type": "function",
+    nodes = [{"id": 1, "name": "relFn", "type": "function",
               "path": str(tmp_path / "pkg" / "mod.py"), "line": 3}]
     records, _ = adapter.map_nodes(nodes, tmp_path, "e", fresh_counters())
     assert records[0]["path"] == "pkg/mod.py"
@@ -190,17 +228,17 @@ def test_map_nodes_absolute_paths_become_relative(tmp_path):
 
 def test_map_nodes_confidence_gate(tmp_path):
     nodes = [
-        {"id": 1, "name": "a", "type": "function", "path": "a.py", "line": 1,
+        {"id": 1, "name": "alphaFn", "type": "function", "path": "a.py", "line": 1,
          "confidence": "EXTRACTED"},
-        {"id": 2, "name": "b", "type": "function", "path": "b.py", "line": 1,
+        {"id": 2, "name": "betaFn", "type": "function", "path": "b.py", "line": 1,
          "confidence": "INFERRED"},
-        {"id": 3, "name": "c", "type": "function", "path": "c.py", "line": 1,
+        {"id": 3, "name": "gammaFn", "type": "function", "path": "c.py", "line": 1,
          "confidence": "AMBIGUOUS"},
     ]
     counters = fresh_counters()
     records, sidecar = adapter.map_nodes(nodes, tmp_path, "e", counters)
-    assert [r["identifier"] for r in records] == ["a"]
-    assert [r["identifier"] for r in sidecar] == ["b"]
+    assert [r["identifier"] for r in records] == ["alphaFn"]
+    assert [r["identifier"] for r in sidecar] == ["betaFn"]
     assert counters["ambiguous_dropped"] == 1
 
 
@@ -372,7 +410,7 @@ def test_absent_confidence_is_counted_not_silent(tmp_path):
     """The gate defaults to EXTRACTED, but the drift must be visible in the counters."""
     counters = fresh_counters()
     records, _ = adapter.map_nodes(
-        [{"id": 1, "name": "f", "type": "function", "path": "a.py", "line": 1}],
+        [{"id": 1, "name": "presentFn", "type": "function", "path": "a.py", "line": 1}],
         tmp_path, "e", counters)
     assert records[0]["confidence"] == "EXTRACTED"
     assert counters["confidence_absent"] == 1
@@ -531,7 +569,12 @@ def test_successful_run_does_not_inherit_previous_output(tmp_path):
 @pytest.mark.parametrize("env,needle", [
     ({"GRAPHIFY_TIMEOUT": "15m"}, "not an integer"),
     ({"GRAPHIFY_TIMEOUT": ""}, "not an integer"),
-    ({"GRAPHIFY_ARGS": "--filter 'unclosed"}, "not parseable"),
+    ({"GRAPHIFY_TIMEOUT": "0"}, "not a positive"),
+    ({"GRAPHIFY_TIMEOUT": "-30"}, "not a positive"),
+    # GRAPHIFY_ARGS only reaches shlex once the LLM-path gate is set; without the gate it
+    # is ignored (covered by test_llm_path_knobs_ignored_without_gate).
+    ({"GRAPHIFY_ARGS": "--filter 'unclosed", "GRAPHIFY_ALLOW_LLM_PATH": "1"},
+     "not parseable"),
     ({"GRAPHIFY_CMD": "'unclosed"}, "not parseable"),
 ])
 def test_malformed_env_config_skips_cleanly(tmp_path, env, needle):
@@ -544,6 +587,76 @@ def test_malformed_env_config_skips_cleanly(tmp_path, env, needle):
     assert result.stdout == ""
     assert "Traceback" not in result.stderr
     assert needle in result.stderr
+
+
+# ─── the code-only invocation is GATED, not merely defaulted ────────────────
+
+@pytest.mark.parametrize("knob,value", [
+    ("GRAPHIFY_SUBCOMMAND", "extract"),
+    ("GRAPHIFY_ARGS", "--cluster"),
+])
+def test_llm_path_knobs_ignored_without_gate(tmp_path, knob, value):
+    """The code-only invocation IS the egress guarantee, so it must not be one ungated
+    env var away from false.
+
+    Before the gate, GRAPHIFY_SUBCOMMAND=extract reached the engine's LLM path while the
+    invocation log still announced "code-only path". Now the knob is ignored, said so
+    loudly, and the recorded argv is still `update ... --no-cluster`.
+    """
+    stub = write_stub_engine(tmp_path, records_json="{}")
+    result = run_adapter(tmp_path, stub_env(stub, **{knob: value}))
+    assert result.returncode == 0, result.stderr
+    assert f"ignoring ['{knob}']" in result.stderr
+    assert "GRAPHIFY_ALLOW_LLM_PATH=1 is not set" in result.stderr
+    invocation = [l for l in result.stderr.splitlines() if "engine invocation" in l]
+    assert invocation and "code-only path" in invocation[0]
+    # Split off the log prefix before searching for the rejected value -- "extract" is a
+    # substring of the "[extract_graphify]" prefix on every line this module logs.
+    argv = invocation[0].split("): ", 1)[1]
+    assert value not in argv
+    assert " update " in argv and "--no-cluster" in argv
+
+
+def test_llm_path_knobs_honoured_with_gate_withdraw_the_claim(tmp_path):
+    """With the gate explicitly set the override is honoured -- and the log must STOP
+    claiming the code-only guarantee for that run."""
+    stub = write_stub_engine(tmp_path, records_json="{}")
+    result = run_adapter(tmp_path, stub_env(stub, GRAPHIFY_SUBCOMMAND="extract",
+                                            GRAPHIFY_ALLOW_LLM_PATH="1"))
+    assert result.returncode == 0, result.stderr
+    assert "code-only invocation OVERRIDDEN" in result.stderr
+    assert "DOES NOT APPLY to this run" in result.stderr
+    invocation = [l for l in result.stderr.splitlines() if "engine invocation" in l]
+    assert invocation and "OVERRIDDEN path" in invocation[0]
+    assert "code-only path" not in invocation[0]
+
+
+# ─── one shared "operator named their own engine" predicate ─────────────────
+
+@pytest.mark.parametrize("cmd_value", ["", None])
+def test_empty_cmd_override_does_not_skip_the_version_floor(tmp_path, cmd_value):
+    """main() and run_engine() must agree on what counts as a custom engine.
+
+    They used to disagree: GRAPHIFY_CMD="" plus the allow gate made main() skip the
+    packaged version floor and stamp provenance `graphifyy==unknown`, while run_engine
+    fell back to the REAL packaged engine -- a run whose provenance was a lie.
+    """
+    env = {"GRAPHIFY_ADAPTER": "1", "GRAPHIFY_ALLOW_CMD_OVERRIDE": "1"}
+    if cmd_value is not None:
+        env["GRAPHIFY_CMD"] = cmd_value
+    result = run_adapter(tmp_path, env)
+    assert result.returncode == 0, result.stderr
+    assert "packaged version floor skipped" not in result.stderr
+    assert "graphifyy==unknown" not in result.stderr
+
+
+def test_cmd_override_equal_to_default_does_not_skip_the_floor(tmp_path):
+    """Setting GRAPHIFY_CMD to exactly the default string is not naming your own engine."""
+    result = run_adapter(tmp_path, {"GRAPHIFY_ADAPTER": "1",
+                                    "GRAPHIFY_ALLOW_CMD_OVERRIDE": "1",
+                                    "GRAPHIFY_CMD": adapter.default_engine_cmd()})
+    assert result.returncode == 0, result.stderr
+    assert "packaged version floor skipped" not in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -626,19 +739,461 @@ def test_leading_dots_stripped_from_identifiers():
     assert records[0]["identifier"] == "caller() -> callee()"
 
 
-def test_python_floor_skips_cleanly_with_actionable_message(tmp_path, monkeypatch, capsys):
-    """Under a pre-3.10 interpreter the packaged path must state the floor and skip —
-    not surface pip's 200-line version-skew noise that never names the problem."""
-    (tmp_path / "app.py").write_text("x = 1\n")
-    monkeypatch.setattr(adapter.sys, "version_info", (3, 9, 6))
-    monkeypatch.setattr(adapter.sys, "argv", ["extract_graphify.py", str(tmp_path)])
-    for var in ("GRAPHIFY_CMD", "GRAPHIFY_ALLOW_CMD_OVERRIDE", "GRAPHIFY_SKIP_PREFLIGHT"):
+def _clean_preflight_env(monkeypatch, repo: Path):
+    monkeypatch.setattr(adapter.sys, "argv", ["extract_graphify.py", str(repo)])
+    for var in ("GRAPHIFY_CMD", "GRAPHIFY_ALLOW_CMD_OVERRIDE", "GRAPHIFY_SKIP_PREFLIGHT",
+                "GRAPHIFY_PYTHON"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GRAPHIFY_ADAPTER", "1")
+
+
+def test_python_floor_skips_cleanly_with_actionable_message(tmp_path, monkeypatch, capsys):
+    """When NO interpreter at or above the engine floor can be found, state the floor and
+    skip — not pip's 200-line version-skew noise that never names the problem.
+
+    `find_modern_python` is stubbed to None so this exercises the give-up branch on any
+    machine. Without that stub the probe finds a real python3.13 here and the run falls
+    through to the "not installed" path, which happens to contain ">= 3.10" (via PIN_HINT)
+    and "3.9" (via the interpreter-resolution log) — so the assertions below would pass
+    while covering nothing.
+    """
+    (tmp_path / "app.py").write_text("x = 1\n")
+    monkeypatch.setattr(adapter.sys, "version_info", (3, 9, 6))
+    monkeypatch.setattr(adapter, "find_modern_python", lambda: None)
+    monkeypatch.setattr(adapter, "_ENGINE_PYTHON_CACHE", {})
+    _clean_preflight_env(monkeypatch, tmp_path)
     rc = adapter.main()
     captured = capsys.readouterr()
     assert rc == 0
     assert captured.out == ""                      # no records emitted
     assert ">= 3.10" in captured.err               # the floor is stated
     assert "3.9" in captured.err                   # the running version is named
+    assert "no suitable interpreter was found" in captured.err
+    assert "GRAPHIFY_PYTHON" in captured.err       # the escape hatch is named
     assert "graphifyy==0.9.43" in captured.err     # the remediation actually works
+
+
+def test_engine_floor_is_checked_against_the_engine_interpreter(tmp_path, monkeypatch,
+                                                                capsys):
+    """The floor must be checked against the interpreter that RUNS the engine.
+
+    Phase 1.5 invokes this adapter as bare `python3` — 3.9.6 on a stock macOS box, the
+    floor this directory declares. Checking the ADAPTER's interpreter made the default-on
+    feature unreachable through the only path that invokes it: the adapter returned 0
+    before ever looking for the engine, no matter what the operator installed.
+    """
+    modern = next((shutil.which(n) for n in ("python3.13", "python3.12", "python3.11",
+                                             "python3.10")
+                   if shutil.which(n)), None)
+    if modern is None:
+        pytest.skip("no 3.10+ interpreter on PATH other than the test runner")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    monkeypatch.setattr(adapter.sys, "version_info", (3, 9, 6))
+    _clean_preflight_env(monkeypatch, tmp_path)
+    # A real 3.10+ interpreter, named explicitly, and NOT sys.executable -- so its version
+    # is probed for real rather than read from the monkeypatched sys.version_info. It has
+    # no graphifyy, so the run must get PAST the Python floor and fail on the ENGINE.
+    monkeypatch.setenv("GRAPHIFY_PYTHON", modern)
+    rc = adapter.main()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "no suitable interpreter was found" not in captured.err
+    assert "not installed" in captured.err
+
+
+def test_engine_python_probe_finds_a_modern_interpreter(monkeypatch):
+    """Fallback path: no GRAPHIFY_PYTHON, adapter under 3.9 — probe PATH rather than give
+    up, so an operator who installed the engine into python3.13 needs no extra config."""
+    monkeypatch.setattr(adapter.sys, "version_info", (3, 9, 6))
+    monkeypatch.setattr(adapter, "_ENGINE_PYTHON_CACHE", {})
+    monkeypatch.delenv("GRAPHIFY_PYTHON", raising=False)
+    monkeypatch.setattr(adapter, "find_modern_python", lambda: "/fake/python3.13")
+    assert adapter.engine_python() == "/fake/python3.13"
+    assert adapter.default_engine_cmd() == "/fake/python3.13 -m graphify"
+
+
+def test_engine_python_explicit_value_wins(monkeypatch):
+    monkeypatch.setenv("GRAPHIFY_PYTHON", "  /opt/py313  ")
+    assert adapter.engine_python() == "/opt/py313"
+
+
+# ─── stale derived artifacts (not just the engine's own output) ─────────────
+
+def _seed_stale_artifacts(repo: Path) -> Path:
+    out = repo / "Generated" / "graphify"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "CODE_GRAPH.jsonl").write_text(
+        '{"path":"old.py","line":1,"kind":"dependency","identifier":"STALE -> STALE"}\n')
+    (out / "NEEDS_VERIFICATION.jsonl").write_text(
+        '{"path":"old.py","line":1,"kind":"module","identifier":"STALE_INFERRED"}\n')
+    (out / "CODE_INDEX_RECORDS.jsonl").write_text(
+        '{"path":"old.py","line":1,"kind":"module","identifier":"STALE_MIRROR"}\n')
+    return out
+
+
+def test_clean_run_with_no_edges_leaves_no_stale_code_graph(tmp_path):
+    """A run that honestly produces zero dependency edges must not leave the PREVIOUS
+    run's CODE_GRAPH.jsonl on disk looking current.
+
+    Both derived files are written conditionally, so clearing only the engine's own output
+    left them behind stamped with the previous run's engine version — the same stale
+    republishing that was fixed for stdout, displaced onto the on-disk artifacts.
+    NEEDS_VERIFICATION.jsonl is the list an operator is told to check before promoting
+    records, so a stale one is actively misleading.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    out = _seed_stale_artifacts(repo)
+    graph = {"nodes": [{"id": 1, "name": "fresh", "type": "function",
+                        "path": "app.py", "line": 3}],
+             "edges": []}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert [json.loads(l)["identifier"] for l in result.stdout.splitlines()] == ["fresh"]
+    assert not (out / "CODE_GRAPH.jsonl").exists()
+    assert not (out / "NEEDS_VERIFICATION.jsonl").exists()
+
+
+def test_failed_run_leaves_no_stale_derived_artifacts(tmp_path):
+    """Same guarantee on the failure path: a non-zero engine exit clears everything."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    out = _seed_stale_artifacts(repo)
+    failing = tmp_path / "failing_engine.py"
+    failing.write_text("import sys\nsys.exit(3)\n")
+    result = run_adapter(repo, stub_env(f"{sys.executable} {failing}"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    for name in ("CODE_GRAPH.jsonl", "NEEDS_VERIFICATION.jsonl",
+                 "CODE_INDEX_RECORDS.jsonl"):
+        assert not (out / name).exists(), name
+
+
+def test_gitignore_survives_the_clear(tmp_path):
+    """clear_engine_output must not delete the .gitignore the adapter itself writes."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    out = _seed_stale_artifacts(repo)
+    graph = {"nodes": [{"id": 1, "name": "fresh", "type": "function",
+                        "path": "app.py", "line": 3}], "edges": []}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert (out / ".gitignore").is_file()
+    assert (out / ".gitignore").read_text().rstrip().endswith("*")
+
+
+# ─── provenance survives the Phase 1.5 boundary ────────────────────────────
+
+def test_emitted_records_are_mirrored_with_provenance(tmp_path):
+    """The Phase 1.5 materialiser keeps only {path,line,kind,identifier}, marks every row
+    VERIFIED, and then rm -f's the extractor file — so without this mirror nothing records
+    which CODE_INDEX.md rows came from a third-party engine rather than our extractors."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    graph = {"nodes": [{"id": 1, "name": "get_user", "type": "function",
+                        "path": "app/api.py", "line": 12}],
+             "edges": []}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub, GRAPHIFY_ENGINE_ID="graphifyy==testpin"))
+    assert result.returncode == 0, result.stderr
+    mirror = repo / "Generated" / "graphify" / "CODE_INDEX_RECORDS.jsonl"
+    assert mirror.is_file()
+    records = [json.loads(l) for l in mirror.read_text().splitlines()]
+    assert [r["identifier"] for r in records] == ["get_user"]
+    assert records[0]["engine"] == "graphifyy==testpin"
+    assert records[0]["confidence"] == "EXTRACTED"
+    # and the mirror matches exactly what went to stdout
+    assert records == [json.loads(l) for l in result.stdout.splitlines()]
+
+
+# ─── identifier cleaning ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    (".main()", "main()"),
+    ("main()", "main()"),
+    ("..utils", ".utils"),      # relative imports keep their remaining dots
+    ("...pkg", "..pkg"),
+    ("  .run  ", "run"),
+    ("...", ""),                # nothing but dots carries no name -- caller drops it
+    ("..", ""),
+    (".", ""),
+])
+def test_clean_identifier_strips_at_most_one_leading_dot(raw, expected):
+    """`lstrip('.')` removed EVERY leading dot, so the Python relative import `..utils`
+    became `utils` — a different module."""
+    assert adapter.clean_identifier(raw) == expected
+
+
+def test_dots_only_node_label_is_dropped_not_emitted_blank(tmp_path):
+    """The emptiness guard runs on the RAW label, so "..." passed it and then stripped to
+    "" — defeating the guard whose whole job is keeping unnamed symbols out of the index."""
+    counters = fresh_counters()
+    nodes = [{"id": 1, "name": "...", "type": "function", "path": "a.py", "line": 4},
+             {"id": 2, "name": ".okayFn()", "type": "function", "path": "a.py", "line": 9}]
+    records, _ = adapter.map_nodes(nodes, Path("/repo"), "graphifyy==test", counters)
+    assert [r["identifier"] for r in records] == ["okayFn()"]
+    assert counters["nodes_missing_fields"] == 1
+
+
+def test_dots_only_edge_endpoint_is_dropped_not_emitted_as_arrow(tmp_path):
+    """Two dots-only labels used to produce the identifier " -> "."""
+    counters = {"edges_unparseable": 0, "edges_non_dependency": 0,
+                "edges_unresolvable": 0, "inferred_to_sidecar": 0,
+                "ambiguous_dropped": 0,
+                "node_index": {"a": {"name": "...", "path": "src/app.py", "line": 5,
+                                     "confidence": "EXTRACTED"},
+                               "b": {"name": "...", "path": "src/lib.py", "line": 9,
+                                     "confidence": "EXTRACTED"}}}
+    edges = [{"source": "a", "target": "b", "relation": "calls",
+              "source_file": "src/app.py", "source_location": "L6"}]
+    records, _ = adapter.map_edges(edges, counters, "graphifyy==test", Path("/repo"))
+    assert records == []
+    assert counters["edges_unresolvable"] == 1
+
+
+# ─── confidence diagnostic: expected baseline vs actual drift ──────────────
+
+def test_all_absent_confidence_is_reported_as_expected_not_a_warning(tmp_path):
+    """On graphifyy==0.9.43 every node lacks the field, so warning on a non-zero count
+    warned on every clean run at a count equal to the whole node set — telling the
+    operator the schema had drifted from the very baseline the README documents."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    graph = {"nodes": [{"id": 1, "name": "a", "type": "function", "path": "a.py", "line": 1},
+                       {"id": 2, "name": "b", "type": "function", "path": "b.py", "line": 2}],
+             "edges": []}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert "expected baseline" in result.stderr
+    # Scoped to the confidence diagnostic by its unique phrase: a bare "WARNING" check
+    # would match the (correct) gated-GRAPHIFY_CMD warning every stub-engine test emits,
+    # and a substring check on "confidence" also matches this test's own tmp_path.
+    assert "schema-drift signal" not in result.stderr
+
+
+def test_partial_absent_confidence_is_the_warning(tmp_path):
+    """A PARTIAL split is the only shape that actually signals drift."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    graph = {"nodes": [
+        {"id": 1, "name": "a", "type": "function", "path": "a.py", "line": 1},
+        {"id": 2, "name": "b", "type": "function", "path": "b.py", "line": 2,
+         "confidence": "EXTRACTED"}],
+        "edges": []}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert "WARNING" in result.stderr
+    assert "1 of 2" in result.stderr
+
+
+def test_dependency_edges_do_not_inflate_the_confidence_count(tmp_path):
+    """Edges carry no confidence key BY DESIGN — that is why weakest_confidence exists —
+    so counting them fired the alarm at 1,803-of-3,159 magnitude on a clean run."""
+    counters = fresh_counters()
+    counters["confidence_present"] = 0
+    nodes = [{"id": 1, "name": "a", "type": "function", "path": "a.py", "line": 1},
+             {"id": 2, "name": "b", "type": "function", "path": "b.py", "line": 2}]
+    adapter.map_nodes(nodes, Path("/repo"), "graphifyy==test", counters)
+    before = counters["confidence_absent"]
+    edges = [{"source": 1, "target": 2, "relation": "import",
+              "source_file": "a.py", "source_location": "L1"}]
+    adapter.map_edges(edges, counters, "graphifyy==test", Path("/repo"))
+    assert counters["confidence_absent"] == before == 2
+
+
+# ─── guarantee 6: always exit 0 ────────────────────────────────────────────
+
+def test_unwritable_repo_skips_cleanly_instead_of_crashing(tmp_path):
+    """An unguarded out_dir.mkdir() raised PermissionError and exited 1. The Phase 1.5 hook
+    ends in `|| true`, so that traceback would be buried in a log file and the conversion
+    would silently lose the adapter with no diagnosis."""
+    repo = tmp_path / "repo"
+    (repo / "Generated").mkdir(parents=True)
+    (repo / "Generated").chmod(0o500)          # read+execute, not writable
+    try:
+        result = run_adapter(repo, {"GRAPHIFY_ADAPTER": "1",
+                                    "GRAPHIFY_SKIP_PREFLIGHT": "1"})
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert "Traceback" not in result.stderr
+        assert "cannot create" in result.stderr
+    finally:
+        (repo / "Generated").chmod(0o700)
+
+
+@pytest.mark.parametrize("payload", ['[{"nodes": []}]', '"a string"', "42", "null"])
+def test_non_object_graph_json_skips_cleanly(tmp_path, payload):
+    """A graph.json whose top level is not an object must not crash the adapter.
+
+    `graph.get("nodes")` was called before anything checked the container, so a top-level
+    JSON array raised AttributeError and exited 1 — through the real __main__ path, with a
+    traceback the Phase 1.5 hook's `|| true` would bury in a log file.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    stub = write_stub_engine(tmp_path, records_json=payload)
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+    assert "UNRECOGNIZED SCHEMA" in result.stderr or "no records emitted" in result.stderr
+
+
+def test_non_list_edges_maps_nodes_and_does_not_crash(tmp_path):
+    """`edges` arriving as an object must degrade to nodes-only, not raise."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    graph = {"nodes": [{"id": 1, "name": "okayFn", "type": "function",
+                        "path": "a.py", "line": 2}],
+             "edges": {"not": "a list"}}
+    stub = write_stub_engine(tmp_path, records_json=json.dumps(graph))
+    result = run_adapter(repo, stub_env(stub))
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert [json.loads(l)["identifier"] for l in result.stdout.splitlines()] == ["okayFn"]
+
+
+# ---------------------------------------------------------------------------
+# Line snap (2026-08-15): align engine declaration-start citations with the
+# T3 exact-line overlap contract (found by the deep e2e conversion test —
+# 1,751 of 1,774 citation-gate failures were annotation-line citations)
+# ---------------------------------------------------------------------------
+
+def _snap_counters():
+    return {"nodes_unparseable": 0, "nodes_missing_fields": 0,
+            "inferred_to_sidecar": 0, "ambiguous_dropped": 0}
+
+
+def _java_node(line, label=".run()"):
+    return [{"id": "a", "label": label, "_callable": True,
+             "source_file": "src/Main.java", "source_location": f"L{line}",
+             "confidence": "EXTRACTED"}]
+
+
+def test_annotation_line_citation_snaps_to_naming_line(tmp_path):
+    src = tmp_path / "src" / "Main.java"
+    src.parent.mkdir()
+    src.write_text("package x;\nclass Main {\n  @Override\n  public void run() {\n  }\n}\n")
+    counters = _snap_counters()
+    records, _ = adapter.map_nodes(_java_node(3), tmp_path, "graphifyy==test", counters)
+    assert records[0]["line"] == 4          # snapped @Override -> declaration
+    assert counters["line_snapped"] == 1
+
+
+def test_snap_noop_when_already_on_naming_line(tmp_path):
+    src = tmp_path / "src" / "Main.java"
+    src.parent.mkdir()
+    src.write_text("package x;\nclass Main {\n  public void run() {\n  }\n}\n")
+    counters = _snap_counters()
+    records, _ = adapter.map_nodes(_java_node(3), tmp_path, "graphifyy==test", counters)
+    assert records[0]["line"] == 3
+    assert "line_snapped" not in counters and "line_snap_miss" not in counters
+
+
+def test_snap_miss_routes_to_sidecar_not_the_index(tmp_path):
+    """An identifier that cannot be found at/near its own citation is by definition
+    unverified — it goes to the sidecar with the engine's original line, never the
+    gate-verified index (where it would be a guaranteed citation failure)."""
+    src = tmp_path / "src" / "Main.java"
+    src.parent.mkdir()
+    src.write_text("\n".join(["// filler"] * 20) + "\n")
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(_java_node(3), tmp_path, "graphifyy==test", counters)
+    assert records == []
+    assert sidecar[0]["line"] == 3          # engine's line preserved for human judgment
+    assert counters["line_snap_miss"] == 1
+    assert counters["snap_miss_to_sidecar"] == 1
+
+
+def test_missing_file_keeps_line_but_empty_file_routes_to_sidecar(tmp_path):
+    """A MISSING file keeps the engine's line unjudged (the adapter rules only on
+    content it read; absence is the gate's jurisdiction). An EMPTY file was read
+    successfully and provably has no verifying line — sidecar (measured: 48 engine
+    records for empty __init__.py files were guaranteed gate failures)."""
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(_java_node(3), tmp_path, "graphifyy==test", counters)
+    assert records[0]["line"] == 3           # no src/Main.java on disk -> unjudged
+    assert sidecar == []
+
+    empty = tmp_path / "src" / "Empty.java"
+    empty.parent.mkdir(exist_ok=True)
+    empty.write_text("")
+    nodes = [{"id": "e", "label": ".run()", "_callable": True,
+              "source_file": "src/Empty.java", "source_location": "L1",
+              "confidence": "EXTRACTED"}]
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(nodes, tmp_path, "graphifyy==test", counters)
+    assert records == [] and len(sidecar) == 1
+    assert counters["unverifiable_file_to_sidecar"] == 1
+
+
+def test_snap_window_is_bounded(tmp_path):
+    """The naming line 11+ lines away is OUTSIDE the window — do not snap to it:
+    a distant match is more plausibly a different symbol than this declaration."""
+    src = tmp_path / "src" / "Main.java"
+    src.parent.mkdir()
+    body = ["@A"] * 12 + ["public void run() {", "}"]
+    src.write_text("\n".join(["package x;", "class Main {"] + body) + "\n")
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(_java_node(3), tmp_path, "graphifyy==test", counters)
+    assert records == [] and sidecar[0]["line"] == 3
+    assert counters["line_snap_miss"] == 1
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("Generated/scripts/run_verify_citations.sh", True),
+    ("Knowledge/CODE_INDEX.md", True),
+    (".claude/agents/developer.md", True),
+    ("CLAUDE.md", True),
+    ("prompts/templates/AI Agents/X_AI_AGENT.md", True),
+    ("BINDING.yml", True),
+    ("src/main/java/App.java", False),
+    ("src/KnowledgeService.java", False),      # segment match only, not substring
+    ("app/GeneratedCode.py", False),
+])
+def test_framework_artifacts_excluded_from_engine_records(path, expected):
+    """The conversion creates Generated/, Knowledge/, .claude/ etc. inside the target
+    repo BEFORE Phase 1.5, and the engine indexes them as if they were the team's
+    code (measured: 261 unverifiable records on a re-run). Knowledge-layer paths are
+    excluded; real code whose names merely contain those words is not."""
+    assert adapter.is_framework_artifact(path) is expected
+
+
+def test_framework_artifact_node_records_excluded_and_counted(tmp_path):
+    nodes = [
+        {"id": "a", "label": "run_verify_citations.sh script", "_callable": False,
+         "file_type": "code", "source_file": "Generated/scripts/run_verify_citations.sh",
+         "source_location": "L1", "confidence": "EXTRACTED"},
+        {"id": "b", "label": "realHandler()", "_callable": True,
+         "source_file": "src/Real.java", "source_location": "L2",
+         "confidence": "EXTRACTED"},
+    ]
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Real.java").write_text("class R {\n  void realHandler() {}\n}\n")
+    counters = _snap_counters()
+    records, _ = adapter.map_nodes(nodes, tmp_path, "graphifyy==test", counters)
+    assert [r["path"] for r in records] == ["src/Real.java"]
+    assert counters["framework_artifacts_excluded"] == 1
+
+
+def test_gate_unverifiable_identifiers_route_to_sidecar(tmp_path):
+    """`US` (stem shorter than 3) and `with()` (stopword) can never pass the T3
+    gate's tokenizer regardless of citation correctness — quarantine, don't emit."""
+    src = tmp_path / "src" / "E.java"
+    src.parent.mkdir()
+    src.write_text("enum D {\n  US,\n  EU\n}\n")
+    nodes = [{"id": "a", "label": ".US", "_callable": False, "file_type": "code",
+              "source_file": "src/E.java", "source_location": "L2",
+              "confidence": "EXTRACTED"},
+             {"id": "b", "label": ".with()", "_callable": True,
+              "source_file": "src/E.java", "source_location": "L2",
+              "confidence": "EXTRACTED"}]
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(nodes, tmp_path, "graphifyy==test", counters)
+    assert records == []
+    assert len(sidecar) == 2
+    assert counters["gate_unverifiable_identifier"] == 2

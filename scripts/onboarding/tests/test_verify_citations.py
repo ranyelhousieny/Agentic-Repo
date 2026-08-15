@@ -1,5 +1,5 @@
 """
-tests/test_verify_citations.py — Tests for scripts/onboarding/verify_citations.sh.
+tests/test_verify_citations.py — Tests for scripts/onboarding/verify_citations.sh (T3).
 
 Verifies:
   1. A citation pointing to lines whose content has ZERO overlap with the claim
@@ -12,21 +12,21 @@ Verifies:
   5. --dry-run prints VALIDATION_SUMMARY content to stdout and writes no file.
   6. Missing cited file → script exits non-zero.
   7. VALIDATION_SUMMARY.md is written with correct totals.
-  8. Forbidden phrases are reported.
+  8. Forbidden phrases (T5) are reported.
   9. Multi-line range citation.
  10. No citations → exit 0 (non-citation-bearing name).
  11. Version-string false-positive guard: "Phase 1.5.2:100" in prose must exit 0.
  12. --dry-run without REPO_PATH positional must succeed (Bug 2 regression).
- 13. Claim derivation: claim derived from Field+Value cells, not from citation text itself.
+ 13. B2: claim derived from Field+Value cells, not from citation text itself.
      Standalone SOURCE lines walk back to preceding non-citation content.
- 14. NOT_FOUND exemption: requires exact Status column match, not substring anywhere.
- 15. Empty-artifact guard: CODE_INDEX.md with zero citations → exit 1 (empty artifact guard).
- 16. Argument validation: --threshold 0 must be rejected with a clear error.
- 17. Span cap: cited line span capped at 40 lines.
- 18. SHA pinning: --sha flag resolves files via git show (requires a real git repo).
- 19. Executable file mode: all scripts/onboarding/*.sh and *.py are mode 100755 in git.
- 20. Claim-derivation regression: source_line_claim_pair fixture — wrong citation flagged, right passes.
- 21. Non-degenerate overlap: wrong citation scores < threshold, right citation ≥ threshold.
+ 14. B4: NOT_FOUND exemption requires exact Status column match, not substring anywhere.
+ 15. B5: CODE_INDEX.md with zero citations → exit 1 (empty artifact guard).
+ 16. B6: --threshold 0 must be rejected with a clear error.
+ 17. B6: cited line span capped at 40 lines.
+ 18. B3: --sha flag resolves files via git show (requires a real git repo).
+ 19. B18: all scripts/onboarding/*.sh and *.py are mode 100755 in git.
+ 20. AC4 regression: source_line_claim_pair fixture — wrong citation flagged, right passes.
+ 21. AC4 non-degenerate overlap: wrong citation scores < threshold, right citation ≥ threshold.
  22. VALIDATION_SUMMARY.md defaults to CWD, not artifact directory.
 """
 from __future__ import annotations
@@ -119,13 +119,13 @@ def test_resolving_citation_passes(tmp_path: Path) -> None:
 
 def test_not_found_row_exempt(tmp_path: Path) -> None:
     """NOT_FOUND rows must not be checked for overlap even with a bad Evidence cell.
-    Includes a real citation so the Empty-artifact guard zero-citation gate is satisfied."""
+    Includes a real citation so the B5 zero-citation gate is satisfied."""
     # A real source file that resolves the second row
     src = tmp_path / "src.md"
     src.write_text("Terraform remote backend S3 state.\n", encoding="utf-8")
     artifact = tmp_path / "CODE_INDEX.md"
     # Row 1: NOT_FOUND (probe: no real path:line) — must be exempt
-    # Row 2: real resolving citation — satisfies Empty-artifact guard gate
+    # Row 2: real resolving citation — satisfies B5 gate
     artifact.write_text(
         "| OpenAPI spec | Not found | probe: find . -name openapi.yaml | NOT_FOUND |\n"
         "| Terraform backend | S3 state | src.md:1 | CONFIRMED |\n",
@@ -304,11 +304,11 @@ def test_dry_run_without_repo_path_positional(tmp_path: Path) -> None:
     assert result.stdout.strip(), f"--dry-run must print to stdout\nstdout: {result.stdout!r}"
 
 
-# ── 13. Claim derivation: claim from Field+Value, not citation text ────────────────────────
+# ── 13. B2: claim from Field+Value, not citation text ────────────────────────
 
 def test_b2_claim_from_field_value_not_citation(tmp_path: Path) -> None:
     """
-    Claim derivation: The claim must use Field+Value (table cols 1+2), not the raw row string.
+    B2: The claim must use Field+Value (table cols 1+2), not the raw row string.
     Terraform/S3 field cited against cooking source must fail.
     """
     source = tmp_path / "src.md"
@@ -320,14 +320,14 @@ def test_b2_claim_from_field_value_not_citation(tmp_path: Path) -> None:
     )
     result = run_verify(artifact, tmp_path, threshold="0.10")
     assert result.returncode != 0, (
-        "Claim derivation: Terraform claim against cooking source should fail\n"
+        "B2: Terraform claim against cooking source should fail\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
 def test_b2_standalone_source_line_uses_preceding_content(tmp_path: Path) -> None:
     """
-    Claim derivation: A standalone **SOURCE:** line derives its claim from preceding prose,
+    B2: A standalone **SOURCE:** line derives its claim from preceding prose,
     not from the citation string itself.
     """
     source = tmp_path / "src.md"
@@ -342,15 +342,15 @@ def test_b2_standalone_source_line_uses_preceding_content(tmp_path: Path) -> Non
     # Preceding prose "Auth JWT bearer" has no overlap with "Cooking recipes pasta"
     result = run_verify(artifact, tmp_path, threshold="0.10")
     assert result.returncode != 0, (
-        "Claim derivation: SOURCE line with mismatched preceding prose should fail\n"
+        "B2: SOURCE line with mismatched preceding prose should fail\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
-# ── 14. NOT_FOUND exemption: NOT_FOUND must be exact Status column, not prose substring ────────
+# ── 14. B4: NOT_FOUND must be exact Status column, not prose substring ────────
 
 def test_b4_not_found_in_prose_does_not_bypass(tmp_path: Path) -> None:
-    """NOT_FOUND exemption: NOT_FOUND in Value cell (not Status) must NOT exempt the row."""
+    """B4: NOT_FOUND in Value cell (not Status) must NOT exempt the row."""
     source = tmp_path / "src.md"
     source.write_text("Cooking recipes pasta water.\n", encoding="utf-8")
     artifact = tmp_path / "CODE_INDEX.md"
@@ -361,14 +361,14 @@ def test_b4_not_found_in_prose_does_not_bypass(tmp_path: Path) -> None:
     )
     result = run_verify(artifact, tmp_path, threshold="0.10")
     assert result.returncode != 0, (
-        "NOT_FOUND exemption: NOT_FOUND in Value must NOT bypass the gate; Status=CONFIRMED should fail\n"
+        "B4: NOT_FOUND in Value must NOT bypass the gate; Status=CONFIRMED should fail\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
 def test_b4_not_found_in_status_column_is_exempt(tmp_path: Path) -> None:
-    """NOT_FOUND exemption: A row with NOT_FOUND in the Status column MUST be exempt.
-    Includes a real citation so the Empty-artifact guard zero-citation gate is satisfied."""
+    """B4: A row with NOT_FOUND in the Status column MUST be exempt.
+    Includes a real citation so the B5 zero-citation gate is satisfied."""
     src = tmp_path / "src.md"
     src.write_text("Terraform remote backend S3 state.\n", encoding="utf-8")
     artifact = tmp_path / "CODE_INDEX.md"
@@ -379,58 +379,58 @@ def test_b4_not_found_in_status_column_is_exempt(tmp_path: Path) -> None:
     )
     result = run_verify(artifact, tmp_path)
     assert result.returncode == 0, (
-        "NOT_FOUND exemption: NOT_FOUND in Status column must be exempt\n"
+        "B4: NOT_FOUND in Status column must be exempt\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
-# ── 15. Empty-artifact guard: empty CODE_INDEX.md → exit 1 ─────────────────────────────────────
+# ── 15. B5: empty CODE_INDEX.md → exit 1 ─────────────────────────────────────
 
 def test_b5_empty_code_index_fails(tmp_path: Path) -> None:
-    """Empty-artifact guard: CODE_INDEX.md with zero citations must exit 1."""
+    """B5: CODE_INDEX.md with zero citations must exit 1."""
     artifact = tmp_path / "CODE_INDEX.md"
     artifact.write_text("# Empty\n\nNo citations here.\n", encoding="utf-8")
     result = run_verify(artifact, tmp_path)
     assert result.returncode != 0, (
-        "Empty-artifact guard: empty CODE_INDEX.md should fail the gate\n"
+        "B5: empty CODE_INDEX.md should fail the gate\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
 def test_b5_min_citations_zero_overrides(tmp_path: Path) -> None:
-    """Empty-artifact guard: --min-citations 0 overrides the default gate for CODE_INDEX.md."""
+    """B5: --min-citations 0 overrides the default gate for CODE_INDEX.md."""
     artifact = tmp_path / "CODE_INDEX.md"
     artifact.write_text("# Empty\n\nNo citations here.\n", encoding="utf-8")
     result = run_verify(artifact, tmp_path, min_citations="0")
     assert result.returncode == 0, (
-        "Empty-artifact guard: --min-citations 0 must suppress the empty-artifact gate\n"
+        "B5: --min-citations 0 must suppress the empty-artifact gate\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
-# ── 16. Argument validation: --threshold 0 rejected ───────────────────────────────────────────
+# ── 16. B6: --threshold 0 rejected ───────────────────────────────────────────
 
 def test_b6_threshold_zero_rejected(tmp_path: Path) -> None:
-    """Argument validation: --threshold 0 must exit non-zero with a clear error."""
+    """B6: --threshold 0 must exit non-zero with a clear error."""
     artifact = tmp_path / "CODE_INDEX.md"
     artifact.write_text("# Anything\n", encoding="utf-8")
     result = run_verify(artifact, tmp_path, threshold="0", min_citations="0")
-    assert result.returncode != 0, f"Argument validation: --threshold 0 must be rejected\nstderr: {result.stderr}"
+    assert result.returncode != 0, f"B6: --threshold 0 must be rejected\nstderr: {result.stderr}"
     assert "threshold" in result.stderr.lower() or "error" in result.stderr.lower()
 
 
 def test_b6_threshold_greater_than_one_rejected(tmp_path: Path) -> None:
-    """Argument validation: --threshold 1.5 must exit non-zero."""
+    """B6: --threshold 1.5 must exit non-zero."""
     artifact = tmp_path / "CODE_INDEX.md"
     artifact.write_text("# Anything\n", encoding="utf-8")
     result = run_verify(artifact, tmp_path, threshold="1.5", min_citations="0")
-    assert result.returncode != 0, f"Argument validation: --threshold > 1 must be rejected\nstderr: {result.stderr}"
+    assert result.returncode != 0, f"B6: --threshold > 1 must be rejected\nstderr: {result.stderr}"
 
 
-# ── 17. Span cap ─────────────────────────────────────────────────────────
+# ── 17. B6: span cap ─────────────────────────────────────────────────────────
 
 def test_b6_span_cap_does_not_crash(tmp_path: Path) -> None:
-    """Span cap: Citing file:1-999 (huge range) must not crash and must be capped at 40."""
+    """B6: Citing file:1-999 (huge range) must not crash and must be capped at 40."""
     content_lines = ["Auth JWT bearer token validation enforcement."]
     content_lines += [f"unrelated filler line {i}" for i in range(2, 101)]
     source = tmp_path / "src.md"
@@ -444,10 +444,10 @@ def test_b6_span_cap_does_not_crash(tmp_path: Path) -> None:
     assert result.returncode in (0, 1), "Script must exit 0 or 1, not crash"
 
 
-# ── 18. SHA pinning: --sha flag resolves via git show ─────────────────────────────────
+# ── 18. B3: --sha flag resolves via git show ─────────────────────────────────
 
 def test_b3_sha_flag_resolves_git_content(tmp_path: Path) -> None:
-    """SHA pinning: --sha uses committed content, not the mutable working tree."""
+    """B3: --sha uses committed content, not the mutable working tree."""
     import subprocess as sp
     sp.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
     sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@test.com"],
@@ -476,20 +476,20 @@ def test_b3_sha_flag_resolves_git_content(tmp_path: Path) -> None:
     result_wt  = run_verify(artifact, tmp_path, threshold="0.10")
 
     assert result_sha.returncode == 0, (
-        "SHA pinning: --sha should use committed Auth content and pass\n"
+        "B3: --sha should use committed Auth content and pass\n"
         f"stdout: {result_sha.stdout}\nstderr: {result_sha.stderr}"
     )
     assert result_wt.returncode != 0, (
-        "SHA pinning: without --sha, working-tree cooking content should fail\n"
+        "B3: without --sha, working-tree cooking content should fail\n"
         f"stdout: {result_wt.stdout}\nstderr: {result_wt.stderr}"
     )
 
 
-# ── 19. Executable file mode: scripts are mode 100755 in git ──────────────────────────────────
+# ── 19. B18: scripts are mode 100755 in git ──────────────────────────────────
 
 def test_b18_scripts_are_executable_in_git() -> None:
     """
-    Executable file mode: All .sh and .py files under scripts/onboarding/ must be checked in at
+    B18: All .sh and .py files under scripts/onboarding/ must be checked in at
     mode 100755 so direct invocation works without `bash <script>`.
     """
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -513,19 +513,19 @@ def test_b18_scripts_are_executable_in_git() -> None:
         mode = parts[0]
         filename = parts[3] if len(parts) >= 4 else "(unknown)"
         assert mode == "100755", (
-            f"Executable file mode: {filename} is mode {mode}, expected 100755. "
+            f"B18: {filename} is mode {mode}, expected 100755. "
             "Run: git update-index --chmod=+x <file>"
         )
 
 
-# ── 20. Claim derivation: source_line_claim_pair regression fixture ───────────────────────
+# ── 20. AC4: source_line_claim_pair regression fixture ───────────────────────
 
 def test_ac4_source_line_claim_pair_fixture(tmp_path: Path) -> None:
     """
-    Claim-derivation regression: the source_line_claim_pair fixture has IDENTICAL surrounding
+    AC4 regression: the source_line_claim_pair fixture has IDENTICAL surrounding
     structure for a wrong citation and a right citation.  The gate MUST:
-      - FLAG  the wrong citation  (catalogue-search claim → reading-room scheduling prose)
-      - PASS  the right citation  (query-stemming claim → catalogue-search prose)
+      - FLAG  the wrong citation  (Terraform claim → hybrid-approach options prose)
+      - PASS  the right citation  (VPC Links claim → CI/CD+Terraform prose)
 
     This is the pair that distinguishes a working claim-derivation from a coin flip.
     The fixture is committed at scripts/onboarding/tests/fixtures/source_line_claim_pair*.md.
@@ -555,7 +555,7 @@ def test_ac4_source_line_claim_pair_fixture(tmp_path: Path) -> None:
 
     # The fixture contains one wrong + one right citation → net failure
     assert result.returncode != 0, (
-        "Claim derivation: source_line_claim_pair fixture must fail the gate "
+        "AC4: source_line_claim_pair fixture must fail the gate "
         "(wrong citation should be flagged).\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
@@ -572,31 +572,31 @@ def test_ac4_source_line_claim_pair_fixture(tmp_path: Path) -> None:
     )
     # "Citations: 2 total, 1 resolved (50.0%), 1 failed"
     assert "1 failed" in citation_count_line, (
-        f"Claim derivation: Expected exactly 1 failed citation (wrong citation).\n"
+        f"AC4: Expected exactly 1 failed citation (wrong citation).\n"
         f"Got: {citation_count_line!r}\nFull stdout:\n{stdout}"
     )
     assert "1 resolved" in citation_count_line, (
-        f"Claim derivation: Expected exactly 1 resolved citation (right citation).\n"
+        f"AC4: Expected exactly 1 resolved citation (right citation).\n"
         f"Got: {citation_count_line!r}\nFull stdout:\n{stdout}"
     )
 
 
-# ── 21. Claim derivation: non-degenerate overlap distribution ─────────────────────────────
+# ── 21. AC4: non-degenerate overlap distribution ─────────────────────────────
 
 def test_ac4_non_degenerate_overlap_distribution(tmp_path: Path) -> None:
     """
-    Non-degenerate overlap assertion (load-bearing constraint):
+    AC4 non-degenerate overlap assertion (load-bearing constraint the framework spec):
 
     On the source_line_claim_pair fixture, the gate MUST produce a non-degenerate
     outcome — NOT the "all pass" or "all fail" coin-flip result the old implementation
     produced:
 
-      - The wrong citation (catalogue-search claim → reading-room scheduling prose):
+      - The wrong citation (Terraform claim → hybrid-approach prose):
         FAILS the gate (overlap < threshold).  Overlap may be 0.0 (total mismatch)
         but the score is produced from a NON-EMPTY claim derived from the preceding
         prose block, NOT from an empty string fallback.
 
-      - The right citation (query-stemming claim → catalogue-search prose):
+      - The right citation (VPC Links claim → CI/CD + Terraform prose):
         PASSES the gate (overlap ≥ threshold, RESOLVED).
 
     The old "mirror bug" signature was: wrong citation PASSED (empty claim → overlap 1.0
@@ -635,11 +635,11 @@ def test_ac4_non_degenerate_overlap_distribution(tmp_path: Path) -> None:
         (l for l in stdout.splitlines() if l.startswith("Citations:")), ""
     )
     assert "1 resolved" in citation_count_line, (
-        f"Claim derivation: Right citation (stemming → catalogue-search prose) must be RESOLVED.\n"
+        f"AC4: Right citation (VPC Links → CI/CD prose) must be RESOLVED.\n"
         f"Got: {citation_count_line!r}\nFull stdout:\n{stdout}"
     )
     assert "1 failed" in citation_count_line, (
-        f"Claim derivation: Wrong citation (search claim → room-scheduling prose) must FAIL.\n"
+        f"AC4: Wrong citation (Terraform claim → hybrid-approach prose) must FAIL.\n"
         f"Got: {citation_count_line!r}\nFull stdout:\n{stdout}"
     )
 
@@ -647,12 +647,12 @@ def test_ac4_non_degenerate_overlap_distribution(tmp_path: Path) -> None:
     #    NOT NOT_FOUND_ON_DISK (which would mean the file resolution is broken) and
     #    NOT an empty-claim auto-pass (which would give overlap 1.0 and show as RESOLVED).
     assert "LOW_OVERLAP" in stdout, (
-        "Claim derivation: Failing citation must have status LOW_OVERLAP (measured score < threshold).\n"
+        "AC4: Failing citation must have status LOW_OVERLAP (measured score < threshold).\n"
         "NOT_FOUND_ON_DISK would indicate a fixture-path mismatch, not a claim issue.\n"
         f"stdout:\n{stdout}"
     )
     assert "NOT_FOUND_ON_DISK" not in stdout, (
-        "Claim derivation: Source file not found on disk. "
+        "AC4: Source file not found on disk. "
         "Check that source_line_claim_pair_source.md is copied to tmp_path, "
         "not tmp_path/fixtures/.\n"
         f"stdout:\n{stdout}"
@@ -663,10 +663,10 @@ def test_ac4_non_degenerate_overlap_distribution(tmp_path: Path) -> None:
 
 def test_validation_summary_defaults_to_cwd(tmp_path: Path) -> None:
     """
-    VALIDATION_SUMMARY.md must default to $(pwd)/VALIDATION_SUMMARY.md,
+    framework-spec fix: VALIDATION_SUMMARY.md must default to $(pwd)/VALIDATION_SUMMARY.md,
     NOT $(dirname "$ARTIFACT_FILE")/VALIDATION_SUMMARY.md.
 
-    When the artifact lives inside a read-only fixture directory (a vendored reference repo, say),
+    When the artifact lives inside a read-only fixture directory (like a shared fixture checkout),
     the old default would write into that directory — violating the ticket's Out-of-scope.
     This test verifies the new default by placing the artifact in a sub-directory and
     running from a different CWD; the summary must land in the CWD, not the artifact dir.
@@ -701,6 +701,6 @@ def test_validation_summary_defaults_to_cwd(tmp_path: Path) -> None:
     )
     assert not summary_in_artifact_dir.exists(), (
         "VALIDATION_SUMMARY.md must NOT be written into the artifact's directory "
-        "(that would contaminate read-only fixture dirs).\n"
+        "(that would contaminate read-only fixture dirs like a shared fixture checkout).\n"
         f"returncode: {result.returncode}\nstdout: {result.stdout}"
     )

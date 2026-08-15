@@ -1,51 +1,51 @@
-## Part A: Reading Room Scheduling Options (lines 1-30)
+## Part A: Deployment Strategy Options (lines 1-20)
 
-This section covers scheduling policy choices for the physical reading room.
+This section covers architectural options for deployment strategy selection.
 
-### Option A: Fixed Daily Slots
+### Option A: Full Cloud-Native
 
-Pros: Predictable staffing, simple signage.
-Cons: Poor utilisation on quiet mornings.
-Timeline: 3 weeks.
-Effort: Low.
-
-### Option B: Rolling Reservations
-
-Pros: Higher seat utilisation, fewer walk-away visitors.
-Cons: Requires a booking desk and a cancellation policy.
-Timeline: 8 weeks.
-Effort: High.
-
-### Option C: Blended Schedule
-
-Combines fixed morning slots with afternoon rolling reservations.
-Pros: Gradual rollout, keeps walk-ins possible.
-Cons: Staff rota complexity.
-Timeline: 5 weeks.
+Pros: Lower operational overhead, faster provisioning.
+Cons: Higher cost, vendor lock-in.
+Timeline: 3 months.
 Effort: Medium.
 
-Every consideration above relates to room scheduling and staffing rotas only.
-No other subsystem is discussed in this part of the document.
+### Option B: On-Premise Only
+
+Pros: Full control, compliance simplicity.
+Cons: Slow provisioning, large capital cost.
+Timeline: 6 months.
+Effort: High.
+
+### Option C: Hybrid Approach
+
+Combines on-premise and cloud-native components.
+Pros: Flexibility, gradual migration.
+Cons: Operational complexity.
+Timeline: 4-5 months.
+Effort: Medium-High.
+
+This section intentionally contains no infrastructure-as-code or networking content.
+Pros and cons relate to deployment strategy only.
 Lines 1-30 end here.
 
-## Part B: Catalogue Search and Indexing (lines 31-60)
+## Part B: CI/CD and Configuration Management (lines 31-60)
 
-The catalogue search subsystem builds an inverted index over title and author fields.
+The CI/CD pipeline uses Terraform modules for infrastructure provisioning.
 
-Search queries are normalised, stemmed, and matched against the inverted index.
-Pagination for catalogue search results uses a cursor rather than an offset:
-  catalogue/search_index.py
-  catalogue/query_parser.py
+Stage variables for CIAM URL, VPC configuration, and health check strategy are
+defined in the Terraform management APIs:
+  terraform/apply.sh
+  terraform/mgmt-apis/client-management.tf
 
-ISBN lookup bypasses the search index entirely and hits the primary key directly.
-Result ranking uses a title-match boost with an author-match fallback.
-Index rebuilds run nightly over the whole catalogue.
+VPC Links are configured using the same module structure as the management plane.
+Health check strategy uses TCP probes on port 443 with a 30-second interval.
+State management follows the same remote S3 backend pattern as the control plane.
 
-The catalogue search index configuration:
-  - Stems query terms with a Porter stemmer before matching the inverted index
-  - Caches the most frequent search queries with a one-hour expiry
-  - Falls back to a title prefix scan when the stemmed query returns nothing
+The VPC Link configuration:
+  - Uses existing VPC CIDR blocks from the shared networking module
+  - Reuses the same Terraform state management backend (S3 + DynamoDB locking)
+  - Health checks match the existing client-management endpoint pattern
 
-### Pagination Behaviour
+### Environment Configuration
 
-Each catalogue search response exposes NEXT_CURSOR, RESULT_COUNT and INDEX_VERSION.
+Each stage exposes CIAM_URL, VPC_LINK_ID, and HEALTH_CHECK_PATH via stage variables.
