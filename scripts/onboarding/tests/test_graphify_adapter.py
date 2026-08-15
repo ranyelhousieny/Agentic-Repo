@@ -42,11 +42,22 @@ def run_adapter(repo_path: Path, env_overrides: dict) -> subprocess.CompletedPro
 
 # ─── flag gate ──────────────────────────────────────────────────────────────
 
-def test_flag_off_is_clean_skip(tmp_path):
-    result = run_adapter(tmp_path, {})
+def test_flag_zero_disables(tmp_path):
+    result = run_adapter(tmp_path, {"GRAPHIFY_ADAPTER": "0"})
     assert result.returncode == 0
     assert result.stdout == ""
     assert "disabled" in result.stderr
+
+
+def test_default_is_enabled(tmp_path):
+    # No flag set: adapter is ON by default and proceeds to the engine preflight.
+    # Point GRAPHIFY_CMD at a missing binary so the test never runs a real engine;
+    # the skip reason must be the ENGINE (absent), never the flag.
+    result = run_adapter(tmp_path, {"GRAPHIFY_CMD": "definitely-not-a-real-binary"})
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert "disabled" not in result.stderr
+    assert ("not installed" in result.stderr) or ("NOT FOUND" in result.stderr)
 
 
 def test_flag_on_without_engine_is_clean_skip(tmp_path):

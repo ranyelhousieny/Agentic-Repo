@@ -13,10 +13,12 @@ endpoint (only if the engine ever exposes route semantics), dependency (import/c
 edges, identifier "src -> dst"). Unknown node kinds are counted and reported on
 stderr, never emitted.
 
-DISABLED BY DEFAULT. This adapter is a tenant behind the extraction contract, not a
+ENABLED BY DEFAULT, opt-out. Runs automatically when the engine is installed; when it
+is not installed, skips cleanly with a one-line install hint (installation is the
+consent act). This adapter is a tenant behind the extraction contract, not a
 load-bearing dependency. Controls:
 
-    GRAPHIFY_ADAPTER=1          enable (anything else: clean skip, exit 0)
+    GRAPHIFY_ADAPTER=0          disable (also: "false", "no", "off"; anything else = enabled)
     GRAPHIFY_CMD                override engine command (default: adapter's own
                                 interpreter, "-m graphify")
     GRAPHIFY_SUBCOMMAND         engine subcommand (default "update" — the code-only,
@@ -35,8 +37,8 @@ Safety guarantees:
   3. Requires graphifyy >= 0.9.24 (older builds silently ignore base-URL overrides).
   4. Always exits 0 (Phase 1.5 convention); all diagnostics go to stderr.
 
-Removal drill: unset GRAPHIFY_ADAPTER and the framework degrades to the bash/python
-extractors with no other change. Artifacts derived from this engine carry
+Removal drill: set GRAPHIFY_ADAPTER=0 (or uninstall the engine) and the framework
+degrades to the bash/python extractors with no other change. Artifacts derived from this engine carry
 engine="graphifyy==<version>" for later re-derivation.
 """
 from __future__ import annotations
@@ -80,7 +82,9 @@ def log(msg: str) -> None:
 
 
 def flag_enabled() -> bool:
-    return os.environ.get("GRAPHIFY_ADAPTER", "").strip().lower() in ("1", "true", "on")
+    # Default ON (opt-out): the engine only runs if deliberately installed, so the
+    # install is the consent act; the flag is the kill switch (controller principle).
+    return os.environ.get("GRAPHIFY_ADAPTER", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def engine_version() -> tuple[int, ...] | None:
@@ -273,7 +277,7 @@ def run_engine(repo_path: Path, out_dir: Path) -> bool:
 
 def main() -> int:
     if not flag_enabled():
-        log("GRAPHIFY_ADAPTER flag is not set — adapter disabled, skipping cleanly "
+        log("GRAPHIFY_ADAPTER=0 — adapter disabled, skipping cleanly "
             "(bash/python extractors remain the engines of record)")
         return 0
 

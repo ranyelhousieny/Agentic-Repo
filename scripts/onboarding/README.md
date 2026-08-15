@@ -41,11 +41,11 @@ returned exactly one hit prior to this fix (`verify_citations.sh:311`), now reso
 This directory contains **two distinct families** of scripts with **different stdout schemas**.
 Do not mix them up.
 
-| Family                                               | Scripts                                                                                      | Schema                                                                                    |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Code-symbol extractors                               | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol                                  |
-| Optional engine adapter (flag-gated, OFF by default) | `extract_graphify.py`                                                                        | Same `{path, line, kind, identifier}` contract + additive `{engine, confidence}` fields   |
-| Ownership extractor                                  | `extract_git_ownership.sh`                                                                   | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
+| Family                                                                 | Scripts                                                                                      | Schema                                                                                    |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Code-symbol extractors                                                 | `extract_spring_boot.sh`, `extract_fastapi.py`, `extract_express.sh`, `extract_terraform.sh` | `{path, line, kind, identifier}` — one record per symbol                                  |
+| Optional engine adapter (ON by default when engine installed, opt-out) | `extract_graphify.py`                                                                        | Same `{path, line, kind, identifier}` contract + additive `{engine, confidence}` fields   |
+| Ownership extractor                                                    | `extract_git_ownership.sh`                                                                   | `{area, top_committers, last_touched_date, commit_count}` — one record per top-level area |
 
 ---
 
@@ -208,18 +208,21 @@ Test locations: `.tftest.hcl` and Terratest `*_test.go` files.
 
 ---
 
-### `extract_graphify.py` (optional engine adapter — flag-gated, OFF by default)
+### `extract_graphify.py` (optional engine adapter — ON by default, opt-out)
 
 ```bash
-GRAPHIFY_ADAPTER=1 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>
+python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # runs if engine installed
+GRAPHIFY_ADAPTER=0 python3 scripts/onboarding/extract_graphify.py <REPO_PATH>   # kill switch
 ```
 
 Runs the `graphifyy` code-graph pass (deterministic tree-sitter AST — no LLM, no network)
 and maps its `graph.json` into the code-symbol contract. The engine is a **tenant behind
 the contract, never load-bearing**:
 
-- **Flag-gated:** without `GRAPHIFY_ADAPTER=1` it skips cleanly (exit 0, zero records).
-  Removal drill: unset the flag and the framework degrades to the extractors above.
+- **On by default, opt-out:** the engine only runs if it was deliberately installed —
+  installation is the consent act. Not installed → clean skip (exit 0, zero records) with
+  a one-line install hint. Removal drill: `GRAPHIFY_ADAPTER=0` (or uninstall the engine)
+  and the framework degrades to the extractors above.
 - **Preflight:** requires `graphifyy >= 0.9.24` installed (`pip install 'graphifyy==0.9.43'`,
   note the double `y`); absent or too old → clean skip with a loud stderr note.
 - **Zero-egress guarantee:** the engine subprocess runs with a sanitized environment —
