@@ -1,12 +1,12 @@
 ---
-description: Transform any repository into a full agentic development environment. Provide a GitHub/GitLab URL or local path. Creates CLAUDE.md, AGENTS.md, START_HERE.md, Knowledge Graph, and specialized AI agents tailored to the detected tech stack.
+description: Transform any repository into a full agentic development environment. Provide a GitLab URL or local path. Creates CLAUDE.md, AGENTS.md, START_HERE.md, Knowledge Graph, and specialized AI agents tailored to the detected tech stack.
 ---
 
 # Convert Repo to Agentic
 
 **Primary workflow for the Agentic-Repos framework.**
 
-Transforms any repository into an AI-powered development environment with battle-tested architecture for evidence-based knowledge management.
+Transforms any repository into an AI-powered development environment with the same architecture as a production platform team.
 
 **♻️ Idempotent / re-runnable.** If the target repo already has agentic content (`CLAUDE.md`, `Knowledge/`, `START_HERE.md`, `.claude/skills/<repo>-agent/`, or a domain agent), this workflow runs in **UPDATE mode** — it merges/refreshes in place (additively) rather than overwriting or duplicating: an existing `CLAUDE.md` gets the Session-Init pointer injected (never clobbered), Source of Truth is preserved, and only missing artifacts are added. Safe to run repeatedly. Details: Step 4 delegates to `prompts/templates/AI Agents/REPO_ONBOARDING_AGENT.md` → Phase 2 "UPDATE MODE".
 
@@ -25,7 +25,7 @@ Store as `$TODAY`.
 
 ### Step 2: Get target repo from user
 
-Ask: "What repository do you want to convert? (GitHub/GitLab URL or local path)"
+Ask: "What repository do you want to convert? (GitLab URL or local path)"
 
 Parse:
 
@@ -74,7 +74,8 @@ Adopt the role and execute all phases defined there:
 ```bash
 # Everything-created gate (Step 15.8 of the agent prompt): required files
 # non-empty, domain-agent globs match, either-or contracts hold (CODEOWNERS |
-# CODEOWNERS.proposed; CODE_GRAPH.jsonl | GRAPHIFY_BOOTSTRAP.err), CODE_INDEX
+# CODEOWNERS.proposed; CODE_GRAPH.jsonl | GRAPHIFY_BOOTSTRAP.err |
+# GRAPHIFY_SKIPPED | GRAPHIFY_NO_EDGES; golden facts | GOLDEN_FACTS_NONE.md), CODE_INDEX
 # registered everywhere, no unexpanded placeholders. Exit 1 = conversion
 # incomplete — the table names exactly what is missing; fix before Step 6.
 python3 "$FRAMEWORK_HOME/scripts/onboarding/final_verify.py" "$REPO_PATH"
@@ -90,8 +91,8 @@ Conversion Complete: $REPO_NAME
 Stack: [detected tech stack]
 Endpoints Found: [count]
 Auth Pattern: [detected pattern]
-Dependency Graph: [graphifyy==<version>, N records, M edges | MISSING — <reason from Generated/Analysis/GRAPHIFY_BOOTSTRAP.err>]
-Golden Facts: [N/N hold (Step 15.7 gate) | MISSING — derive failed, see stderr]
+Dependency Graph: [graphifyy==<version>, N records, M edges | NONE — <reason from whichever marker is present under Generated/Analysis/: GRAPHIFY_BOOTSTRAP.err (install failed), GRAPHIFY_SKIPPED (operator kill switch), GRAPHIFY_NO_EDGES (clean run, no edges resolved)>]
+Golden Facts: [N/N hold (Step 15.7 gate) | NONE DERIVABLE — see Knowledge/golden/GOLDEN_FACTS_NONE.md, an L5 gap not a failure | MISSING — derive failed, see stderr]
 Final Verify: [N/N checks pass (Step 5 gate)]
 CODEOWNERS: [proposed — review, rename, commit | already governed | not derivable — <reason>]
 

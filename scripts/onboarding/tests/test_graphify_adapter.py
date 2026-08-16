@@ -1180,6 +1180,57 @@ def test_framework_artifact_node_records_excluded_and_counted(tmp_path):
     assert counters["framework_artifacts_excluded"] == 1
 
 
+def test_file_node_dropped_so_it_cannot_claim_a_declaration_line(tmp_path):
+    """The per-file node is not a symbol: dropped and counted, never scanned or sidecar'd.
+
+    The token scan turned `ClientRestricted.java` into a citation of the line that
+    declares the CLASS `ClientRestricted`, publishing one location as the definition of
+    two symbols — 161 of the 164 duplicated path:line locations on the JAX-RS service
+    were this exact pair. `Main` is kept to show only the filename label is affected.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "ClientRestricted.java").write_text(
+        "package x;\n\n@interface ClientRestricted {\n}\n")
+    (src / "Main.java").write_text("package x;\nclass Main {\n  void run() {}\n}\n")
+    nodes = [
+        {"id": "f", "label": "ClientRestricted.java", "file_type": "code",
+         "source_file": "src/ClientRestricted.java", "source_location": "L1"},
+        {"id": "c", "label": "ClientRestricted", "_callable": True, "file_type": "code",
+         "source_file": "src/ClientRestricted.java", "source_location": "L3"},
+        {"id": "m", "label": "Main", "_callable": True, "file_type": "code",
+         "source_file": "src/Main.java", "source_location": "L2"},
+    ]
+    counters = _snap_counters()
+    records, sidecar = adapter.map_nodes(nodes, tmp_path, "graphifyy==test", counters)
+    assert [(r["identifier"], r["line"]) for r in records] == \
+        [("ClientRestricted", 3), ("Main", 2)]
+    assert sidecar == []
+    assert counters["file_nodes_not_symbols"] == 1
+
+
+@pytest.mark.parametrize("path,identifier,expected", [
+    ("services/nexus/nexus/s3/s3_async.py", "s3_async.py", True),
+    ("src/main/java/com/ca/smws/Main.java", "Main.java", True),
+    ("s3_async.py", "s3_async.py", True),
+    ("scripts/run_local.sh", "run_local.sh script", True),   # bash_entrypoint 2nd node
+    ("services/nexus/nexus/s3/s3_async.py", "_upload_file_async()", False),
+    ("pom.xml", "sample-legacy-pom", False),        # a package, named in the file
+    ("libs/campaign-lib/pyproject.toml", "campaign-lib", False),
+    ("scripts/shared_script_lib.sh", "run_in_directory()", False),
+])
+def test_names_its_own_file_isolates_the_per_file_node(path, identifier, expected):
+    """The predicate must catch filename labels and nothing else — package artifactIds
+    and shell functions are named BY a line in their file and keep the token scan.
+
+    graphifyy emits a SECOND per-file node for every shell script: a `bash_entrypoint`
+    labelled "<basename> script" (measured on graphifyy==0.9.43 against a real
+    run_local.sh fixture — id `scripts_run_local_sh__entry`). Exact equality against
+    the bare basename alone did not catch it, so it fell through to the token scan and
+    republished a header comment as its declaration line."""
+    assert adapter.names_its_own_file(path, identifier) is expected
+
+
 def test_gate_unverifiable_identifiers_route_to_sidecar(tmp_path):
     """`US` (stem shorter than 3) and `with()` (stopword) can never pass the T3
     gate's tokenizer regardless of citation correctness — quarantine, don't emit."""
@@ -1197,3 +1248,29 @@ def test_gate_unverifiable_identifiers_route_to_sidecar(tmp_path):
     assert records == []
     assert len(sidecar) == 2
     assert counters["gate_unverifiable_identifier"] == 2
+
+
+def test_python_declarations_parses_raw_text_not_a_splitlines_roundtrip(tmp_path):
+    """python_declarations() must ast.parse() the cached RAW text, not a
+    text.splitlines() / "\\n".join(...) reconstruction of it.
+
+    str.splitlines() treats a form feed (U+000C) as a line boundary; Python's own
+    tokenizer/ast does not. A form feed inside a line-1 comment, followed by `def foo()`
+    on line 2 of the ACTUAL file, stays on line 2 under ast.parse(raw_text) — but a
+    splitlines()/join round-trip first splits that comment into two list entries at the
+    form feed, then rejoins them with `\\n`, inserting a line break the raw file never
+    had and shifting `def foo():` (and every line after it) down by one. The citation
+    this function backs must match the file ast actually parsed, not a reconstruction —
+    a real repo's form-feed or U+2028 byte would otherwise silently mis-cite every
+    subsequent declaration in the file.
+    """
+    src = tmp_path / "module.py"
+    src.write_bytes("# note\x0c\ndef foo():\n    pass\n".encode("utf-8"))
+    cache: dict = {}
+    declarations = adapter.python_declarations(tmp_path, "module.py", cache)
+    assert declarations is not None, "module.py should parse cleanly"
+    decl_line, _start, _end = declarations["foo"][0]
+    assert decl_line == 2, (
+        f"def foo(): is on line 2 of the raw file on disk; python_declarations "
+        f"reported line {decl_line} — a splitlines()/join round-trip would report 3"
+    )

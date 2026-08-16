@@ -113,3 +113,48 @@ def test_no_evidence_is_a_loud_usage_error_not_an_empty_pass(tmp_path):
     r = run("assert", tmp_path)
     assert r.returncode == 3
     assert "run derive first" in r.stderr
+
+
+def test_no_derivable_facts_states_itself_instead_of_going_silent(tmp_path):
+    """rc 3 alone was invisible downstream: Step 15.7 did not branch on it and
+    final_verify.py REQUIRED the facts, so a repo with nothing derivable failed the
+    conversion under a drift message naming the wrong cause. The marker turns it into
+    a recorded, checkable L5 readiness gap."""
+    (tmp_path / "Knowledge").mkdir()
+    marker = tmp_path / "Knowledge" / "golden" / "GOLDEN_FACTS_NONE.md"
+    assert run("derive", tmp_path).returncode == 3
+    assert marker.is_file(), "absence must be STATED, not inferred from an exit code"
+    body = marker.read_text()
+    assert "not a conversion failure" in body.lower()
+    assert "L5 readiness gap" in body
+
+
+def test_a_repo_that_grows_an_endpoint_loses_the_none_marker(tmp_path):
+    """A stale marker is an either-half of final_verify's golden row -- left behind it
+    would assert 'nothing derivable' over real facts sitting beside it."""
+    repo = fixture(tmp_path)
+    index = repo / "Knowledge" / "CODE_INDEX.md"
+    phase1 = repo / "Generated" / "Analysis" / "PHASE1_DETECTION.md"
+    graph = repo / "Generated" / "graphify" / "CODE_GRAPH.jsonl"
+    full_index, full_phase1, full_graph = (index.read_text(), phase1.read_text(),
+                                           graph.read_text())
+    # Nothing derivable ANYWHERE: no endpoint/entry_point/config rows, no detected
+    # framework, no dependency edge -- a docs repo, or a pure library.
+    index.write_text(
+        "| Kind | Identifier | Citation | Status |\n"
+        "|------|------------|----------|--------|\n"
+        "| module | app | app/__init__.py:1 | VERIFIED |\n"
+    )
+    phase1.write_text("no detections\n")
+    graph.write_text("")
+    assert run("derive", repo).returncode == 3
+    marker = repo / "Knowledge" / "golden" / "GOLDEN_FACTS_NONE.md"
+    assert marker.is_file()
+
+    index.write_text(full_index)                                 # the repo grows endpoints
+    phase1.write_text(full_phase1)
+    graph.write_text(full_graph)
+    r = run("derive", repo)
+    assert r.returncode == 0, r.stderr
+    assert (repo / "Knowledge" / "golden" / "GOLDEN_FACTS.jsonl").is_file()
+    assert not marker.is_file()

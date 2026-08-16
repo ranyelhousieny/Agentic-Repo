@@ -7,12 +7,12 @@ declared minimum interpreter versions:
   python3 3.9+  (for all .py scripts and the embedded Python heredoc in verify_citations.sh)
   bash 3.2+     (for all .sh scripts)
 
-Architecture notes (framework spec):
+Architecture notes (PROJ-2574):
   - The smoke test MUST discover a real python3.9 interpreter (via PYTHON39 env var,
     PATH search, or known pyenv/homebrew locations) and pytest.skip when it is absent.
     It must NEVER fall back to sys.executable — doing so reproduces the exact failure mode
     (test passes under Python 3.12+, defect ships to Python 3.9) that this test exists to
-    catch.  See load-bearing constraint in the framework spec.
+    catch.  See load-bearing constraint in PROJ-2574.
 
   - For bash, the test uses the system /bin/bash.  On macOS, /bin/bash is bash 3.2
     (Apple's GPL2 freeze).  On Linux, /bin/bash is typically 4.x or 5.x, but the scripts
@@ -35,6 +35,7 @@ Interpreter discovery (for python3.9):
 """
 from __future__ import annotations
 
+import ast
 import glob
 import os
 import shutil
@@ -79,7 +80,7 @@ def _find_python39() -> str | None:
     """
     Return the path to a Python 3.9 interpreter, or None if not found.
 
-    Discovery strategy (framework spec):
+    Discovery strategy (PROJ-2574 fix):
       Priority order:
         1. PYTHON39 environment variable — accept only if it reports version (3, 9).
            Fail loudly (assert) if it reports something else, so the operator knows
@@ -208,7 +209,7 @@ def test_verify_citations_compiles_under_python39(tmp_path: Path) -> None:
     The embedded Python body in verify_citations.sh must compile and execute
     under Python 3.9 without a TypeError at def-time.
 
-    This is the regression test for the framework spec: `Path | None` at line 311 caused a
+    This is the regression test for PROJ-2574: `Path | None` at line 311 caused a
     TypeError under Python 3.9 because `|` as a union operator on types is PEP 604
     (Python 3.10+).  The fix (`Optional[Path]`) is verified here.
 
@@ -239,7 +240,7 @@ def test_verify_citations_compiles_under_python39(tmp_path: Path) -> None:
 
     assert result.returncode == 0, (
         f"verify_citations.sh crashed under Python 3.9 (returncode={result.returncode}).\n"
-        f"This is the framework-spec regression: check for 'Path | None' (PEP 604) annotations "
+        f"This is the PROJ-2574 regression: check for 'Path | None' (PEP 604) annotations "
         f"in the embedded Python body — replace with Optional[Path] from typing.\n"
         f"stderr: {result.stderr}\n"
         f"stdout: {result.stdout}"
@@ -341,7 +342,7 @@ def test_extract_express_syntax_check(tmp_path: Path) -> None:
 @_SKIP_BASH
 def test_extract_express_path_with_space(tmp_path: Path) -> None:
     """
-    framework-spec regression: extract_express.sh must emit a non-zero record count
+    PROJ-2574 regression: extract_express.sh must emit a non-zero record count
     from a repo whose path contains a space.
 
     Before the SRC_DIRS array fix, $SRC_DIRS (a space-separated string) was
@@ -440,13 +441,13 @@ def test_extract_git_ownership_syntax_check(tmp_path: Path) -> None:
 def test_no_pep604_union_in_heredoc(tmp_path: Path) -> None:
     """
     No PEP-604 (X | Y) type annotation may exist in verify_citations.sh's embedded
-    Python body.  This is the root-cause test for the original the framework spec crash.
+    Python body.  This is the root-cause test for the original PROJ-2574 crash.
 
     Method: run the full script under Python 3.9 with a minimal fixture and assert
     exit 0 (done by test_verify_citations_compiles_under_python39 above).  Additionally,
     run a direct Python compile of a snippet that would crash on 3.9 if the bug recurs.
 
-    framework-spec fix: the canary uses a multi-line -c string with an embedded newline so
+    PROJ-2574 fix: the canary uses a multi-line -c string with an embedded newline so
     `def f() -> Path | None:` is a proper function definition — NOT joined with `;`
     which is a SyntaxError on every Python version regardless of PEP-604 support.
     """
@@ -497,3 +498,49 @@ def test_no_match_case_in_py_scripts() -> None:
             "Possible causes: match/case statement, PEP-604 union (X | Y), or other "
             "Python 3.10+ syntax."
         )
+
+
+def test_no_pep604_union_in_py_scripts() -> None:
+    """
+    No PEP-604 (X | Y) union may appear in an annotation in any .py script under
+    scripts/onboarding/ — the ban README.md states, enforced rather than asserted.
+
+    This runs on any interpreter and does NOT duplicate the py_compile sweep above:
+    every one of these scripts carries `from __future__ import annotations`, which turns
+    annotations into strings and lets a PEP-604 union compile and run cleanly on 3.9.
+    That is exactly how three of them reached `extract_fastapi.py` after PROJ-2574 swept
+    the directory clean — a compile check cannot see them, so this walks annotation
+    subtrees for `BinOp(op=BitOr)` instead. Scoped to the shipped scripts, matching the
+    sweep in README.md; tests/ runs on the developer interpreter, not the 3.9 floor.
+    """
+    py_scripts = sorted(SCRIPTS_DIR.glob("*.py"))
+    assert py_scripts, "No .py scripts found under scripts/onboarding/ — check SCRIPTS_DIR"
+
+    hits = []
+    for script in py_scripts:
+        tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+        annotations = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                annotations.append(node.returns)
+                annotations.extend(a.annotation for a in node.args.args)
+                annotations.extend(a.annotation for a in node.args.kwonlyargs)
+                annotations.extend(a.annotation for a in node.args.posonlyargs)
+                if node.args.vararg is not None:
+                    annotations.append(node.args.vararg.annotation)
+                if node.args.kwarg is not None:
+                    annotations.append(node.args.kwarg.annotation)
+            elif isinstance(node, ast.AnnAssign):
+                annotations.append(node.annotation)
+        for annotation in annotations:
+            if annotation is None:
+                continue
+            for sub in ast.walk(annotation):
+                if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                    hits.append(f"{script.name}:{sub.lineno}")
+
+    assert not hits, (
+        f"PEP-604 union annotations found (Python 3.10+, forbidden by "
+        f"scripts/onboarding/README.md): {hits}\n"
+        "Use typing.Optional[X] / typing.Union[X, Y] instead."
+    )

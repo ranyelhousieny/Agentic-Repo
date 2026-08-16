@@ -10,7 +10,7 @@ Stdout contract: one JSON-lines record per discovered symbol, e.g.:
 
 kind values:
     module        — top-level Python package (directory with __init__.py)
-    entry_point   — FastAPI() / Flask() / APIRouter() instantiation
+    entry_point   — FastAPI() / Flask() / APIRouter() / Blueprint() instantiation
     endpoint      — route decorator: @app.get/post/put/delete/patch, @router.*
     config        — os.getenv / os.environ key, Pydantic BaseSettings field
     integration   — httpx.AsyncClient / requests.get/post, external service calls
@@ -22,12 +22,15 @@ Exit 0 always (partial output is valid).
 Requires: python3 3.9+
 """
 
+from __future__ import annotations
+
 import ast
 import json
 import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 def emit(path: str, line: int, kind: str, identifier: str) -> None:
     """Print one JSON-lines record; drop silently if any field is invalid.
@@ -51,6 +54,126 @@ def rel(repo_root: Path, p: Path) -> str:
 # ── AST-based extraction ──────────────────────────────────────────────────────
 
 ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+ROUTE_FACTORIES = {"FastAPI", "Flask", "APIRouter", "Blueprint"}
+
+
+def called_factory(value: Optional[ast.expr]) -> str:
+    """Name of the route-object factory `value` calls, or "" if it calls none."""
+    if not isinstance(value, ast.Call):
+        return ""
+    func = value.func
+    if isinstance(func, ast.Name):
+        name = func.id
+    elif isinstance(func, ast.Attribute):
+        name = func.attr
+    else:
+        return ""
+    return name if name in ROUTE_FACTORIES else ""
+
+
+def collect_route_objects(tree: ast.Module) -> set[str]:
+    """Names this module binds to the result of a call — its candidate route objects.
+
+    Requiring a literal `FastAPI()` / `Flask()` / `APIRouter()` / `Blueprint()` call
+    recognises the object only where it is constructed inline, so the application-factory
+    idiom Flask documents (`app = create_app()`) binds a route object in-file and still
+    resolves to nothing. Any call binding counts instead, because the false positives this
+    signal exists to reject decorate an IMPORTED name — all 108 measured on a real FastAPI
+    monorepo were `@mock.patch` against `from unittest import mock` — and an import is not
+    a call binding. Measured cost of the wider rule: 0 added rows across five real Python
+    services. Resolving what `create_app` returns is the call-graph step this deliberately
+    does not take; the name is only ever a fallback signal (below).
+
+    A positive signal only, never a veto: a router module that does
+    `from .main import fastapi_app` binds nothing locally yet still declares real
+    routes (measured on a real FastAPI monorepo: `@fastapi_app.get("/raise-exception")`
+    in a tests/ file whose `fastapi_app` comes from another package).
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Call):
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+    return names
+
+
+def literal_path_prefix(arg: Optional[ast.expr]) -> Optional[str]:
+    """The literal text a decorator argument is known to begin with, else None.
+
+    An f-string route path is an `ast.JoinedStr`, so its leading "/" sits in `values[0]`
+    rather than on the node itself — visible proof of shape that reading only `ast.Constant`
+    throws away. Measured: `@self.router.post(f"/collections/{...}")` is the one route in
+    five real Python services whose receiver no in-file binding can resolve, and skipping
+    the shape test on `JoinedStr` dropped it. An f-string that opens with an interpolation
+    (`f"{BASE}/callbacks"`) exposes no such text and returns None, so it falls to the
+    receiver signal like any other computed argument.
+    """
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.JoinedStr) and arg.values:
+        head = arg.values[0]
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            return head.value
+    return None
+
+
+def looks_like_route_path(value: str) -> bool:
+    """Whether a decorator argument's literal text is shaped like a mountable route path.
+
+    Both frameworks enforce the shape at runtime — Starlette's `Route.__init__` asserts
+    `path.startswith("/")`, Werkzeug's `Rule` rejects a rule without a leading slash — so
+    a literal that is not "/"-rooted cannot be a route whatever it decorates. That is what
+    separates `@router.patch("/workflows/{workflow_id}")` from
+    `@mock.patch("campaign_ws.deploy_templates._deploy_template")`, and unlike receiver
+    resolution it still holds when the route object was imported from another module.
+    A `requests.post("https://…")` / `httpx.get("https://…")` target fails it too.
+
+    The empty path a prefixed APIRouter accepts for its own root fails on purpose: the
+    prefix lives on the `APIRouter()` call, not on the decorator, so the row would carry
+    no path at all (measured on a real FastAPI monorepo: all 5 such decorators sit one
+    line from a `("/")` twin on the same handler, which is indexed instead).
+    """
+    return value.startswith("/")
+
+
+def route_from_decorator(decorator: ast.expr,
+                         route_objects: set[str]) -> Optional[tuple[str, str]]:
+    """(METHOD, path) for a genuine route decorator, else None.
+
+    Accepting any `@<anything>.get/post/put/delete/patch/head/options(...)` treats the
+    HTTP verb as a property of the attribute name when it is really a property of the
+    receiver. Measured cost on a real FastAPI monorepo: 110 of 254 endpoint rows carried
+    PATCH against 2 genuine PATCH routes, because 108 `@mock.patch("dotted.python.path")`
+    decorators in tests/ parse identically — a 55x overstatement of the PATCH surface.
+
+    A path with literal text carries its own proof and is judged on shape alone; only its
+    full-literal form can be reported, an interpolated one reads "(dynamic)". A path with
+    no literal text carries none, so it falls back to the other signal: the receiver being
+    a name this module binds. That fallback needs `func.value` to be an `ast.Name`, which
+    rules out `@self.router.get(...)` — resolving that would mean finding the enclosing
+    class's `self.router = APIRouter()`, and it buys nothing measurable: a decorator on
+    `self` can only run inside a method body, and the sole instance across five real Python
+    services writes its path literally, so the shape test admits it whatever the receiver.
+    """
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    if not isinstance(func, ast.Attribute) or func.attr not in ROUTE_METHODS:
+        return None
+
+    arg: Optional[ast.expr] = decorator.args[0] if decorator.args else next(
+        (kw.value for kw in decorator.keywords if kw.arg in ("path", "rule")), None)
+    prefix = literal_path_prefix(arg)
+    if prefix is not None:
+        if not looks_like_route_path(prefix):
+            return None
+        return func.attr.upper(), prefix if isinstance(arg, ast.Constant) else "(dynamic)"
+    if not (isinstance(func.value, ast.Name) and func.value.id in route_objects):
+        return None
+    return func.attr.upper(), "(dynamic)" if arg is not None else "(unmapped)"
+
 
 def extract_file(repo_root: Path, filepath: Path) -> None:
     rel_path = rel(repo_root, filepath)
@@ -64,52 +187,25 @@ def extract_file(repo_root: Path, filepath: Path) -> None:
         return
 
     lines = source.splitlines()
+    route_objects = collect_route_objects(tree)
 
     for node in ast.walk(tree):
         # ── entry points ──────────────────────────────────────────────────
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    if isinstance(node.value, ast.Call):
-                        func = node.value.func
-                        func_name = ""
-                        if isinstance(func, ast.Name):
-                            func_name = func.id
-                        elif isinstance(func, ast.Attribute):
-                            func_name = func.attr
-                        if func_name in ("FastAPI", "Flask", "APIRouter", "Blueprint"):
-                            emit(rel_path, node.lineno, "entry_point",
-                                 f"{target.id} = {func_name}()")
+                    func_name = called_factory(node.value)
+                    if func_name:
+                        emit(rel_path, node.lineno, "entry_point",
+                             f"{target.id} = {func_name}()")
 
         # ── route decorators ──────────────────────────────────────────────
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for decorator in node.decorator_list:
-                http_method = None
-                path_val = None
-
-                # @app.get("/path") or @router.post("/path")
-                if isinstance(decorator, ast.Call):
-                    func = decorator.func
-                    if isinstance(func, ast.Attribute) and func.attr in ROUTE_METHODS:
-                        http_method = func.attr.upper()
-                        # First positional arg is the path
-                        if decorator.args:
-                            arg = decorator.args[0]
-                            if isinstance(arg, ast.Constant):
-                                # Use .value (Python 3.8+); .s is deprecated in 3.12
-                                val = arg.value
-                                if isinstance(val, str):
-                                    path_val = val
-                                else:
-                                    path_val = "(dynamic)"
-                            else:
-                                path_val = "(dynamic)"
-                        else:
-                            path_val = "(unmapped)"
-
-                if http_method and path_val:
+                route = route_from_decorator(decorator, route_objects)
+                if route:
                     emit(rel_path, decorator.lineno, "endpoint",
-                         f"{http_method} {path_val}")
+                         f"{route[0]} {route[1]}")
 
         # ── config: os.getenv / os.environ ────────────────────────────────
         if isinstance(node, ast.Call):
@@ -138,20 +234,36 @@ def extract_file(repo_root: Path, filepath: Path) -> None:
 
 
 def extract_file_regex(repo_root: Path, filepath: Path, source: str = "") -> None:
-    """Regex fallback for files that fail AST parsing."""
+    """Regex fallback for files that fail AST parsing.
+
+    The route pattern gates on path shape rather than on a two-name receiver allowlist
+    (`app|router`), which silently dropped every other route object a real FastAPI
+    monorepo uses — `graphs_router`, `executions_router`, `runs_router`, `fastapi_app`
+    carry 28 of its genuine routes. Shape is the gate the AST path also applies, so a
+    `@mock.patch("dotted.python.path")` line cannot slip through the wider receiver;
+    a non-path match formats to "" and `emit` drops it under the fail-closed contract.
+
+    Both the verb list and the factory list are interpolated from the module constants:
+    a hardcoded copy is a list that drifts, and this one already had — it never learned
+    `Blueprint` when `ROUTE_FACTORIES` gained it.
+    """
     if not source:
         try:
             source = filepath.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return
     rel_path = rel(repo_root, filepath)
+    verbs = "|".join(sorted(ROUTE_METHODS))
+    factories = "|".join(sorted(ROUTE_FACTORIES))
     for lineno, line in enumerate(source.splitlines(), start=1):
         for pat, kind, fmt in [
-            (r'@(app|router)\.(get|post|put|delete|patch)\("([^"]*)"',
-             "endpoint", lambda m: f"{m.group(2).upper()} {m.group(3)}"),
+            (rf'^\s*@[A-Za-z_][A-Za-z0-9_.]*\.({verbs})\("([^"]*)"',
+             "endpoint",
+             lambda m: (f"{m.group(1).upper()} {m.group(2)}"
+                        if looks_like_route_path(m.group(2)) else "")),
             (r'os\.getenv\("([^"]+)"', "config",
              lambda m: f'os.getenv("{m.group(1)}")'),
-            (r'(FastAPI|Flask|APIRouter)\(\)', "entry_point",
+            (rf'({factories})\(\)', "entry_point",
              lambda m: m.group(0)),
             (r'(httpx|requests|aiohttp)\.\w+', "integration",
              lambda m: m.group(0)),

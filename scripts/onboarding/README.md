@@ -28,8 +28,20 @@ floor verbatim.  Python 3.9 is the declared minimum because:
 Bash 3.2 compatibility is already enforced (B15) — the `# Requires: bash 3.2+` note on
 each script documents and locks that guarantee.
 
-**Sweep results:** `git grep -nE '\| *None|None *\|' scripts/onboarding/`
-returned exactly one hit prior to this fix (`verify_citations.sh:311`), now resolved.
+**Sweep results (PROJ-2574):** `git grep -nE '\| *None|None *\|' scripts/onboarding/`
+returned exactly one hit prior to this fix (`verify_citations.sh:311`), resolved in the
+shipped scripts. Running the same sweep today returns 8 hits, none of them a regression:
+1 is this README line's own self-reference to the grep pattern, and 7 are in
+`tests/test_min_interpreter_smoke.py` — 2 real `str | None` return annotations (the
+test's own interpreter-discovery helpers, which run on the developer interpreter, never
+the 3.9 floor) plus 5 prose/comment/canary-string mentions of `Path | None` documenting
+the historical defect. The ban is pinned by `tests/test_min_interpreter_smoke.py::test_no_pep604_union_in_py_scripts`,
+which walks annotation ASTs rather than compiling: every `.py` script here carries
+`from __future__ import annotations`, so a PEP-604 union compiles and runs fine on 3.9 and
+the `py_compile` sweep below cannot see it — which is how three of them re-entered
+`extract_fastapi.py` after this sweep declared the directory clean. The pin covers the
+shipped `scripts/onboarding/*.py`; `tests/` is out of scope and does carry two (they run
+on the developer interpreter, never on the 3.9 floor).
 `git grep -nE '^\s*match .*:$' scripts/onboarding/*.py scripts/onboarding/*.sh` — 0 hits.
 `git grep -nE 'declare -A|mapfile|readarray|\$\{[a-zA-Z_]+,,\}' scripts/onboarding/` — 0 hits
 (two results in `extract_express.sh` comments documenting what NOT to use — not live code).
@@ -149,6 +161,20 @@ and test files (`test_*.py` / `*_test.py`).
 **Fail-closed guard:** `emit()` checks `isinstance(line, int) and line > 0` — never passes
 `str(0)` or `None` as a valid line number.
 
+**Route decorators are gated on path shape, not on the verb.** `@x.get/post/patch/...` is
+not a route unless its path argument is "/"-rooted (Starlette's `Route.__init__` and
+Werkzeug's `Rule` both require that at runtime) — otherwise the receiver has to be a name
+the module itself binds. Without the shape gate, 110 of 254 endpoint rows on a real FastAPI
+monorepo carried PATCH against 2 genuine PATCH routes: 108 `@mock.patch("dotted.python.path")`
+decorators in tests/ parse identically to a route. Both signals are needed, not either alone
+— the shape gate keeps a route on an imported router (28 genuine routes on that same repo),
+and the receiver gate keeps one whose path is a constant or a factory-bound `app`.
+
+**Residual — shape is not provenance.** `@mock.patch("/absolute/looking/target")` passes the
+shape gate and would be indexed as a route. Closing it means resolving `mock` across module
+boundaries to prove it is not a route object, which this extractor does not do; 0 instances
+across the five real Python services measured.
+
 **Fallback:** when `ast.parse` raises `SyntaxError` or `OSError`, the script falls back to
 a regex pass over the same `source` string (which is always initialized to `""` before the
 try-block, so it is always bound).
@@ -230,10 +256,12 @@ the contract, never load-bearing**:
   the extractors above.
 - **Preflight:** the engine requires Python **>= 3.10**, and that floor is checked against
   the interpreter that will actually RUN it — not against the one running this adapter.
-  This distinction is the whole ballgame under Phase 1.5, which invokes the adapter as bare
-  `python3`: on a stock macOS box that is 3.9.6 (the floor this directory declares), so
-  checking the adapter's own interpreter made the feature unreachable through the only path
-  that invokes it. Resolution order is `GRAPHIFY_PYTHON`, else the adapter's own interpreter
+  The two can differ: this adapter is documented above as runnable under bare `python3`,
+  which on a stock macOS box is 3.9.6 (the floor this directory declares), so checking the
+  adapter's own interpreter made the feature unreachable that way. Phase 1.5 itself no
+  longer takes that route — since `ensure_graphify.sh` landed it runs the adapter under the
+  interpreter that script resolves, which can import the engine and is therefore already
+  3.10+. Resolution order is `GRAPHIFY_PYTHON`, else the adapter's own interpreter
   when it already meets the floor, else a probe of `python3.13`…`python3.10` on `PATH`. Only
   when none of those yields a 3.10+ interpreter does the adapter state the floor, name what
   it probed, and skip cleanly. It then requires `graphifyy >= 0.9.24` installed **in that
@@ -283,7 +311,32 @@ the contract, never load-bearing**:
   have no meaningful lines to cite, and on one real service 827 of 3,969 records (20.8%)
   described Swagger's internals rather than the service.
 - **Fail-closed on citations:** a node or edge whose line number cannot be resolved is
-  dropped and counted, never emitted with a fabricated `line: 1`.
+  dropped and counted, never emitted with a fabricated `line: 1`. A symbol record must
+  cite the line that DECLARES the symbol, and for Python that is settled by `ast`, not by
+  searching for the name: a word-boundary search finds `campaign` on a neighbouring
+  function's docstring but not inside `load_campaign_template`, which put 1,341 of 2,069
+  handler rows on a line other than the declaration and published 16 `path:line` locations
+  as the definition of two symbols each — every one stamped `VERIFIED`, because the T3 gate
+  only asks for token overlap on the cited line. A declaration `ast` cannot confirm —
+  unparseable file, no such name, or a tie between same-named declarations — goes to
+  `NEEDS_VERIFICATION.jsonl`. The bounded forward token scan remains the rule for languages
+  the adapter cannot parse, where the engine cites an annotation rather than the
+  declaration (1,751 of 1,774 gate failures on a real JAX-RS service).
+  A node that is not a symbol at all is dropped and counted as `file_nodes_not_symbols`:
+  the engine emits one node per source file whose label IS the filename, plus — for every
+  shell script — a second per-file node labelled `"<basename> script"` (a
+  `bash_entrypoint`), and no line of a file declares the file. Its `identifier` cell only
+  restates the tail of its `path` cell, so the gate — which scores Field+Value against the
+  cited line and deliberately excludes the path — rejects it even at the file's own line 1
+  (of 592 such nodes on one Python service — 586 file nodes plus 6 `bash_entrypoint`
+  duplicates from its own `scripts/*.sh` — line 1 verifies 60 by coincidence, fails 461
+  and does not exist for 71; 2 of 431 on the JAX-RS one, which has no per-file
+  shell-script duplicate), while sending it through the token scan instead lands on the
+  line that declares something ELSE. Between them the two rules take duplicated `path:line`
+  locations — one location published as the definition of two symbols, each stamped
+  `VERIFIED` — from 22 to 0 on the Python service and from 164 to 3 on the JAX-RS one,
+  where the residue is the token scan's own and not this class: two enum constants that
+  snap to the same line, and two test methods whose names differ only by a `_`.
 - **Stale-output safety:** **every** artifact the adapter derives is removed before the
   engine runs — the engine-native `graphify-out/` tree AND `CODE_GRAPH.jsonl`,
   `NEEDS_VERIFICATION.jsonl` and `CODE_INDEX_RECORDS.jsonl` — and a non-zero engine exit
@@ -413,7 +466,7 @@ to a framework motion — the converter IS the remediation for L3-L5.
   `Knowledge/CODE_INDEX.md`, `Knowledge/Source of Truth/PROJECT_VISION.md`,
   `Generated/PROGRESS_TRACKER.md`, `.claude/skills/*/SKILL.md`) against the framework's
   own documented limit — 360,000 bytes, the same set and unit as the `wc -c` measurement
-  in `REPO_ONBOARDING_AGENT.md` "Activation Token Budget" (rationale in framework history).
+  in `REPO_ONBOARDING_AGENT.md` "Activation Token Budget" (ref: PROJ-2486/2487).
 - **L5 measures use, not scaffolding:** the converter creates `Generated/session_logs/`
   and `Knowledge/Source of Truth/` itself, so those criteria require at least one real
   file, not just the directory.
@@ -436,7 +489,7 @@ Comments start with `#`. Two matching modes:
 - **EMAIL_GLOB** — lines containing `@` match against the email portion of `"Name <email>"` strings. Shell-style globs (`*`). Example: `*-sa@*`, `*@noreply.*`
 - **NAME_SUBSTR** — lines NOT containing `@` are matched case-insensitively as a substring of the full `"Name <email>"` string. Example: `renovate`, `dependabot`
 
-Edit this file to add org-specific bot identities. Default entries cover `svc-automation`,
+Edit this file to add org-specific bot identities. Default entries cover `the-pipeline-service-account`,
 `renovate[bot]`, `dependabot[bot]`, `gitlab-ci-token`, noreply patterns, and `*-sa@*` service accounts.
 
 ---
@@ -532,6 +585,138 @@ Human-authored rows **outside** these markers are preserved verbatim on every re
 `--dry-run` prints the proposed merged content to stdout without writing to disk.
 
 **Requires:** `python3 3.9+`, `bash 3.2+` (for the subsidiary shell script)
+
+---
+
+### `ensure_graphify.sh` (Phase 1.5 engine bootstrap — resolve or install)
+
+```bash
+bash scripts/onboarding/ensure_graphify.sh      # engine python path on STDOUT
+```
+
+The dependency graph is what separates a rich agent (symbol-level CODE_INDEX,
+`CODE_GRAPH.jsonl` impact analysis, quarantined-uncertainty sidecar) from a surface-level
+one, so Phase 1.5 treats the engine as expected-present rather than optional: this script
+tries every reasonable path to an engine before conceding, and a skip is legitimate ONLY
+when installation is provably impossible on this machine.
+
+Resolution ladder, first success wins:
+
+1. `GRAPHIFY_PYTHON` override — the operator names the interpreter exactly
+2. An existing engine venv — reused; a **broken** venv is rebuilt, not trusted
+3. Bootstrap — the newest compatible `python3.x` on PATH creates the venv and pip-installs
+   the pinned engine
+
+**Exit codes (Phase 1.5 keys its behaviour off these — keep them stable):**
+
+| rc | Meaning |
+|---|---|
+| 0 | Engine ready; the venv's python path is on STDOUT and nothing else ever is |
+| 2 | Disabled by the operator (`GRAPHIFY_ADAPTER=0/false/no/off`) — respected, quiet. Unreachable from Phase 1.5's affirmative arm, which normalises the flag identically |
+| 3 | Provably impossible on this machine; the reason is on STDERR (no python >= 3.10, venv creation failed, pip install failed e.g. offline, corrupt install) |
+
+The engine dist name and module name DIFFER: pip installs `graphifyy` (the pin), python
+imports `graphify`. Both are probed so a future rename keeps working.
+
+**Env:** `GRAPHIFY_PIN` (default `graphifyy==0.9.43`), `GRAPHIFY_VENV_DIR` (default
+`$HOME/.venvs/graphify`), `GRAPHIFY_PYTHON`, `GRAPHIFY_ADAPTER`.
+
+**Requires:** `bash 3.2+` (no `${VAR,,}`), and a `python3 >= 3.10` on PATH to bootstrap
+
+---
+
+### `golden_facts.py` (Step 15.7 standing drift gate)
+
+```bash
+python3 scripts/onboarding/golden_facts.py derive <REPO_PATH> [--rederive]
+python3 scripts/onboarding/golden_facts.py assert <REPO_PATH>
+```
+
+Derives named, mechanically checkable claims from evidence the conversion just
+gate-verified (CODE_INDEX rows, the Phase 1 framework detection, one dependency edge) and
+writes them to `Knowledge/golden/GOLDEN_FACTS.{jsonl,md}`. `assert` re-verifies every fact
+against the current tree and rewrites the md status column.
+
+`derive` is DERIVE-ONCE: an existing `GOLDEN_FACTS.jsonl` is left untouched, because
+overwriting the anchors on every run would defeat the drift detection they exist for.
+`--rederive` is the explicit refresh. Selection is deterministic (sorted, capped), so two
+derives from the same tree produce identical files, and the token matching mirrors
+`verify_citations.sh`'s tokenizer so the two gates cannot disagree about the same claim.
+
+First-run assertion is trivially green by construction. The value is UPDATE-mode re-runs,
+where a moved endpoint or a reworked auth pattern becomes a HARD FAILURE instead of a
+silent lie.
+
+**Exit codes:** `assert` 0 all pass / 1 any fail / 3 usage. `derive` **3 means "nothing
+derivable"** — a docs repo or a pure library has no endpoint / entry_point / config rows,
+which is a complete conversion, not a failed one. Step 15.7 records
+`Knowledge/golden/GOLDEN_FACTS_NONE.md` and reports it as an L5 readiness gap;
+`final_verify.py`'s either-contract accepts that file in place of the facts.
+
+**Requires:** `python3 3.9+`
+
+---
+
+### `propose_codeowners.py` (Step 10.9 — a draft, never authority)
+
+```bash
+python3 scripts/onboarding/propose_codeowners.py <REPO_PATH>
+```
+
+Writes `CODEOWNERS.proposed` at the repo root: top recent committers overall, plus
+per-directory rules only where a first-level directory's ownership evidence actually
+differs from the root rule. It is a PROPOSAL by construction — CODEOWNERS drives GitLab
+approval rules, so a converter that commits one is granting review authority nobody
+consented to. The owning team reviews, renames to `CODEOWNERS`, and commits; that rename
+is what flips the L2 readiness criterion.
+
+Evidence rules: a recent window (default 400 commits) rather than full history, because
+review authority should reflect who works here now; the same bot filter as the SME
+derivation (builtin list + `.agentic/bots.txt`); and owners are **emails**, verbatim from
+git identities — valid GitLab CODEOWNERS syntax, and honest, since mapping emails to
+`@usernames` would be guessing.
+
+UPDATE-safe: a real `CODEOWNERS` in any of the four conventional locations means the repo
+is already governed — exit 0, write nothing, say so. An existing `.proposed` is
+regenerated, since it is a derived draft and the reviewed copy is the one the team renamed.
+
+**Exit codes:** 0 written or already-governed; 3 unusable (not a git repo, or no non-bot
+history), reason on stderr.
+
+**Requires:** `python3 3.9+`, `git`
+
+---
+
+### `final_verify.py` (Step 15.8 — the everything-created hard gate)
+
+```bash
+python3 scripts/onboarding/final_verify.py <REPO_PATH>
+```
+
+The LAST gate before a conversion presents results, and equally useful standalone as a
+health check on an already-converted repo. The Step 5 `ls` proves files exist and the
+completion checklist is prose an agent can skim past; this is one command, one exit code,
+and a table naming exactly what is missing.
+
+Five check classes, each derived from the conversion's own contract:
+
+| Class | What it proves |
+|---|---|
+| `required` | Every required artifact exists AND is non-empty — an empty `CLAUDE.md` is a created file and a failed conversion at the same time |
+| `glob` | The domain-agent skill, `-ai` command and agent source prompt globs each match at least one non-empty file |
+| `either` | Contract alternatives: `CODEOWNERS` \| `CODEOWNERS.proposed`; `CODE_GRAPH.jsonl` \| one of the three markers that say why there is no graph (`GRAPHIFY_BOOTSTRAP.err`, `GRAPHIFY_SKIPPED`, `GRAPHIFY_NO_EDGES`); golden facts \| `GOLDEN_FACTS_NONE.md` |
+| `registered` | `Knowledge/CODE_INDEX.md` is named in `CLAUDE.md` (Session-Init), `KNOWLEDGE_GRAPH.md` and `DOCUMENT_INDEX.md` — a generated index nobody can navigate to is dead weight |
+| `no-leak` | No unexpanded `$REPO_NAME_LOWER` / `${REPO_NAME_UPPER}` / `$TODAY` placeholders in emitted markdown |
+
+The N-way `either` form is deliberate. "No dependency graph" and "no golden facts" are
+legitimate outcomes for real repo classes — the kill switch is documented, a docs repo has
+no endpoints — and a two-way form turned both into a hard conversion failure with no way
+through. Absence still has to be STATED, which is why the alternatives are marker files
+and not a loosened check.
+
+**Exit codes:** 0 all pass / 1 any fail (failures repeated on stderr) / 3 usage.
+
+**Requires:** `python3 3.9+`
 
 ---
 

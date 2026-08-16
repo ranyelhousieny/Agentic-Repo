@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
@@ -143,12 +145,56 @@ def test_placeholder_leak_fails(tmp_path):
 
 
 def test_loud_skip_satisfies_the_graph_alternative(tmp_path):
-    """No engine output is acceptable ONLY with the loud-skip artifact."""
+    """No engine output is acceptable ONLY with a marker that states WHY."""
     repo = _converted_tree(tmp_path)
     (repo / "Generated" / "graphify" / "CODE_GRAPH.jsonl").unlink()
     r = run("final_verify.py", repo)
-    assert r.returncode == 1                      # neither half -> fail
+    assert r.returncode == 1                      # no alternative -> fail
     (repo / "Generated" / "Analysis" / "GRAPHIFY_BOOTSTRAP.err").write_text(
         "rc=3: no python >= 3.10 on PATH\n")
     r = run("final_verify.py", repo)
     assert r.returncode == 0                      # loud skip -> contract met
+
+
+@pytest.mark.parametrize("marker,body", [
+    ("Generated/Analysis/GRAPHIFY_SKIPPED",
+     "GRAPHIFY_SKIPPED reason: operator kill switch, GRAPHIFY_ADAPTER=0\n"),
+    ("Generated/Analysis/GRAPHIFY_NO_EDGES",
+     "GRAPHIFY_NO_EDGES engine=graphifyy==0.9.43\n"),
+])
+def test_documented_no_graph_outcomes_do_not_fail_the_conversion(tmp_path, marker, body):
+    """Two legitimate states used to abort Step 15.8 with no way through.
+
+    GRAPHIFY_ADAPTER=0 is the documented kill switch and used to write NOTHING ("not
+    even the log file"), and a clean engine run with zero dependency edges leaves no
+    CODE_GRAPH.jsonl while the success path has already rm -f'd the .err. Both hit a
+    two-way either-contract with neither half present. readiness_report.py scores the
+    same absence as N/A, so the two gates disagreed.
+
+    The fix was to make each state NAME itself, which is what the parametrized bodies
+    below are: Phase 1.5's `*)` arm writes GRAPHIFY_SKIPPED and the adapter writes
+    GRAPHIFY_NO_EDGES. The kill switch still writes no adapter log and no records --
+    that half of the old claim stands -- but "writes NOTHING" has not been true since
+    the marker contract landed, and this test's own body is the proof."""
+    repo = _converted_tree(tmp_path)
+    (repo / "Generated" / "graphify" / "CODE_GRAPH.jsonl").unlink()
+    assert run("final_verify.py", repo).returncode == 1
+    p = repo / marker
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    r = run("final_verify.py", repo)
+    assert r.returncode == 0, r.stderr
+
+
+def test_no_derivable_golden_facts_does_not_fail_the_conversion(tmp_path):
+    """A docs repo or a pure library has no endpoint/entry_point/config rows, so
+    golden_facts.py derive exits 3 and writes no facts. Requiring them outright made
+    those repo classes unconvertible -- including this framework's self-conversion."""
+    repo = _converted_tree(tmp_path)
+    (repo / "Knowledge" / "golden" / "GOLDEN_FACTS.jsonl").unlink()
+    (repo / "Knowledge" / "golden" / "GOLDEN_FACTS.md").unlink()
+    assert run("final_verify.py", repo).returncode == 1
+    (repo / "Knowledge" / "golden" / "GOLDEN_FACTS_NONE.md").write_text(
+        "# Golden facts: NONE DERIVABLE\n")
+    r = run("final_verify.py", repo)
+    assert r.returncode == 0, r.stderr

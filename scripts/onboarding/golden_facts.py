@@ -157,6 +157,37 @@ def write_md(repo, facts, results=None):
     (repo / GOLDEN_DIR / MD).write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
+NONE_MARKER = "GOLDEN_FACTS_NONE.md"
+
+
+def write_none_marker(repo):
+    """State that this repo has nothing derivable, so absence is evidence too.
+
+    rc 3 alone was invisible to the conversion: Step 15.7 did not branch on it and
+    final_verify.py REQUIRED the facts outright, so a repo whose CODE_INDEX has no
+    endpoint / entry_point / config rows -- a docs repo, a pure library, this
+    framework's own self-conversion -- failed the conversion with a drift message
+    that named the wrong cause. The marker turns "no eval assets" into a recorded,
+    checkable L5 readiness gap instead of a dead end.
+    """
+    path = repo / GOLDEN_DIR / NONE_MARKER
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# Golden facts: NONE DERIVABLE\n\n"
+            "`golden_facts.py derive` found no `endpoint`, `entry_point` or `config` rows in\n"
+            "`Knowledge/CODE_INDEX.md`, so there is nothing durable to assert on future runs.\n\n"
+            "**This is not a conversion failure.** It is an L5 readiness gap: the repo has no\n"
+            "extractable behaviour to anchor an eval on (docs/markdown repos and pure libraries\n"
+            "land here legitimately). Step 15.7 records it and continues.\n\n"
+            "It BECOMES actionable the moment the repo grows an endpoint or an entry point:\n"
+            "re-run the conversion in UPDATE mode, or `golden_facts.py derive --rederive .`,\n"
+            "and this file is replaced by real facts.\n",
+            encoding="utf-8")
+    except OSError:
+        pass          # same fail-soft contract as the rest of this script
+
+
 def main():
     if len(sys.argv) < 3 or sys.argv[1] not in ("derive", "assert"):
         print(__doc__.strip().splitlines()[0], file=sys.stderr)
@@ -174,6 +205,7 @@ def main():
             return 0
         facts = derive_facts(repo)
         if not facts:
+            write_none_marker(repo)
             print("[golden_facts] no derivable facts (is Knowledge/CODE_INDEX.md "
                   "present and populated?)", file=sys.stderr)
             return 3
@@ -182,6 +214,15 @@ def main():
             for fact in facts:
                 fh.write(json.dumps(fact, sort_keys=True) + "\n")
         write_md(repo, facts)
+        # A repo that grows its first endpoint must not keep a marker claiming it has
+        # none -- the marker is an either-half of final_verify's golden row, and a stale
+        # one would assert "nothing derivable" over real facts sitting beside it.
+        none_marker = repo / GOLDEN_DIR / NONE_MARKER
+        if none_marker.is_file():
+            try:
+                none_marker.unlink()
+            except OSError:
+                pass
         print("[golden_facts] derived %d facts -> %s" % (len(facts), jsonl.relative_to(repo)))
         return 0
 

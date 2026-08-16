@@ -88,6 +88,15 @@ Safety guarantees:
      EXTRACTED, are counted, and trip a loud WARNING — see confidence_of().
   3. FAIL-CLOSED CITATIONS. A node or edge whose line cannot be resolved is dropped and
      counted, never emitted with a fabricated line 1 (README.md "Fail-closed guarantee").
+     A symbol record's line must be the line that DECLARES the symbol. For Python that is
+     settled by ast, not by searching for the name (declaration_line); for languages this
+     adapter cannot parse it falls back to the bounded token scan the annotated-Java case
+     needs (snap_line_to_identifier). A declaration ast cannot confirm — unparseable file,
+     no such name, or a name several declarations in the file answer to — goes to the
+     needs-verification sidecar rather than into the index. A node that is not a symbol at
+     all — the per-file node whose label is its own filename — is dropped and counted
+     (names_its_own_file): no line declares a file, so running it through the token scan
+     only found a line that declares something ELSE and published that location twice.
      VENDORED/GENERATED/MINIFIED paths (node_modules, dist, build, target, *.min.js,
      swagger-ui bundles, ...) are filtered before emission and counted as vendor_excluded:
      minified bundles have no meaningful lines to cite, and one-in-five records on a real
@@ -106,11 +115,13 @@ Safety guarantees:
      overrides, since guarantee 1 strips every *_BASE_URL variable anyway. The engine also
      requires Python >= 3.10, so the floor is checked against GRAPHIFY_PYTHON — the
      interpreter that will actually RUN the engine — not against the one running this
-     adapter. Phase 1.5 invokes the adapter as bare "python3" (3.9.6 on stock macOS), so
-     checking the adapter's own interpreter would make the feature unreachable through the
-     only path that invokes it. When no 3.10+ interpreter can be found the adapter names
-     the ones it tried and skips cleanly (the adapter itself stays 3.9-compatible per the
-     directory convention).
+     adapter. The two can differ: this adapter is documented as runnable under bare
+     "python3" (3.9.6 on stock macOS), and checking sys.version_info would make the
+     feature unreachable that way. Phase 1.5 itself no longer takes that route — it
+     resolves the adapter's own interpreter through ensure_graphify.sh, which hands back
+     one that can import the engine and is therefore already 3.10+. When no 3.10+
+     interpreter can be found the adapter names the ones it tried and skips cleanly (the
+     adapter itself stays 3.9-compatible per the directory convention).
   6. Always exits 0 (Phase 1.5 convention); all diagnostics go to stderr. Malformed
      values for the env knobs above are reported and skipped, never raised — and so are
      filesystem failures: an unwritable target repo makes the adapter skip, not crash.
@@ -121,6 +132,7 @@ engine carry engine="graphifyy==<version>" for later re-derivation.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -129,7 +141,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 MIN_VERSION = (0, 9, 24)
 # The engine requires Python >= 3.10 (this adapter itself runs on 3.9). The hint names a
@@ -169,6 +181,9 @@ KIND_MAP = {
     "class": "module", "module": "module", "file": "module", "package": "module",
     "endpoint": "endpoint", "route": "endpoint",
 }
+# The KIND_MAP keys that name a source DECLARATION. `module`/`file`/`package` do not:
+# their label is a module name, not a symbol any line declares.
+DECLARATION_KINDS = {"function", "method", "func", "class"}
 DEPENDENCY_EDGE_TYPES = {"import", "imports", "imports_from", "call", "calls",
                          "depends", "depends_on", "dependency", "uses", "references"}
 # graphifyy structural relations that are NOT dependencies (counted, never emitted):
@@ -420,6 +435,50 @@ def node_kind(node: dict) -> Optional[str]:
     return None
 
 
+def is_declaration(node: dict) -> bool:
+    """True when the node names a `def`/`class` declaration rather than a file or package.
+
+    This is what decides which citation rule a record is held to. A declaration has a
+    language construct that names it, so a parser can settle its line. Everything else
+    the engine still labels with a name a line can carry — a distribution's artifactId in
+    `pom.xml`, a bash function in a `.sh` script, a Java enum constant — keeps the token
+    scan, which is the only rule available where no parser here can read the file.
+    """
+    explicit = str(first_key(node, KIND_KEYS) or "").lower()
+    if explicit in KIND_MAP:
+        return explicit in DECLARATION_KINDS
+    return bool(node.get("_callable") or node.get("_callable_class"))
+
+
+def names_its_own_file(path: str, identifier: str) -> bool:
+    """True when the label is nothing but the file's own basename.
+
+    graphifyy emits one node per source file whose label IS the filename (`s3_async.py`,
+    `ClientRestricted.java`), plus — for every shell script — a SECOND per-file node
+    labelled `"<basename> script"` (a `bash_entrypoint`, id suffix `__entry`; measured
+    against graphifyy==0.9.43 via a real `run_local.sh` fixture). Neither node names a
+    declaration: no line of a file declares the file itself, so both have no citation
+    to make — their `identifier` cell only restates the tail of `path`, which is why
+    the T3 gate — deliberately scoring Field+Value against the cited line, never the
+    path — rejects them even when cited at the file's own line 1. Before this function
+    also caught the `bash_entrypoint` form, its citation fell through to the token scan
+    instead, which snapped a `run_local.sh` header comment at line 3 to the entrypoint
+    and republished it as the declaration of a symbol that declares nothing — the same
+    class of duplicate-citation bug this function exists to prevent for the plain
+    per-file node.
+
+    Measured with the adapter's own T3 rule (`gate_stems(identifier) &
+    gate_stems(lines[0])`, mirroring verify_citations.sh's tokenizer) against real
+    `graph.json` output: of 592 such nodes on sample-monorepo (586 file nodes plus 6
+    `bash_entrypoint` duplicates from the repo's own `scripts/*.sh`), line 1 verifies
+    60 by coincidence, fails 461 and does not exist at all for 71 (empty
+    `__init__.py`); on the JAX-RS service, 2 of 431 (that corpus has no per-file
+    shell-script duplicate, so its total is unchanged by the widening above).
+    """
+    basename = path.rsplit("/", 1)[-1]
+    return identifier == basename or identifier == basename + " script"
+
+
 def rel_path(raw, repo_path: Path) -> Optional[str]:
     if not raw or not isinstance(raw, str):
         return None
@@ -523,8 +582,166 @@ def gate_surviving_words(identifier: str) -> list:
     return out
 
 
+def gate_stems(text: str) -> set:
+    """The stems verify_citations.sh's tokenize() would keep for `text`.
+
+    The gate splits on non-alphanumerics, so `load_campaign_template` contributes the
+    stems load/campaign/template on BOTH sides of its comparison. A regex word-boundary
+    search over the same line agrees with none of that — `\\bcampaign\\b` does not match
+    inside `load_campaign_template`, because `_` is a word character. Comparing stems is
+    what makes a prediction made here agree with the gate's own arithmetic.
+    """
+    return {_gate_stem(w) for w in gate_surviving_words(text)}
+
+
+def file_text(repo_path: Path, path: str, cache: dict) -> Union[str, bool]:
+    """Cached source text for a file, or False when it could not be READ.
+
+    Every path that judges a citation goes through here, so a file is read at most once
+    per run however many of its symbols the engine reported. Before the two paths shared
+    it, declaration_line read the lines and python_declarations re-read the same bytes for
+    ast — 498 Python files on the sample-monorepo conversion, read twice each.
+    """
+    memo = cache.setdefault("text", {})
+    if path not in memo:
+        try:
+            memo[path] = (repo_path / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            memo[path] = False
+    return memo[path]
+
+
+def file_lines(repo_path: Path, path: str, cache: dict) -> Union[List[str], bool]:
+    """Cached line list for a file, or False when it could not be READ.
+
+    False is a different verdict from an empty list, and both callers depend on the
+    difference: a file that was read and has no lines provably cannot verify anything,
+    while a file that could not be read is the gate's jurisdiction, not this adapter's.
+
+    Splits the cached text rather than re-reading it, but keeps the split result too:
+    ast wants the text and the line rules want the list, and neither should pay for the
+    other's representation.
+    """
+    memo = cache.setdefault("lines", {})
+    if path not in memo:
+        text = file_text(repo_path, path, cache)
+        memo[path] = False if text is False else text.splitlines()
+    return memo[path]
+
+
+def python_declarations(repo_path: Path, path: str,
+                        cache: dict) -> Optional[Dict[str, List[Tuple[int, int, int]]]]:
+    """Every `def`/`async def`/`class` in a Python file: name -> [(decl, start, end)].
+
+    `decl` is the line that NAMES the symbol. ast puts `lineno` on the `def`/`class`
+    keyword rather than on the decorators above it, which is exactly the line a citation
+    has to carry, since the T3 gate scores overlap against the cited line alone. `start`
+    widens the span back over the decorators so that an engine citing `@app.get(...)` is
+    still recognised as pointing INTO this declaration when several share a name.
+
+    None when this interpreter cannot parse the file — on the shipped path a genuine
+    syntax error, not a version skew. Phase 1.5 runs the adapter under the interpreter
+    ensure_graphify.sh resolves, and that script only ever returns one that can import
+    the engine, which needs 3.10+ (its bootstrap gates on `sys.version_info >= (3, 10)`);
+    the sample-monorepo conversion parses every Python file it reads, 0 quarantined.
+    A 3.9 interpreter reaches this branch only when an operator runs the adapter by hand
+    as bare `python3`, where the 10 files using `match` statements (140 symbols on that
+    same repo) are 3.10+ syntax. Either way the records are quarantined, never guessed at.
+    """
+    memo = cache.setdefault("declarations", {})
+    if path in memo:
+        return memo[path]
+    source = file_text(repo_path, path, cache)
+    if source is False:
+        memo[path] = None
+        return None
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        memo[path] = None
+        return None
+    found: Dict[str, List[Tuple[int, int, int]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            end = getattr(node, "end_lineno", None) or node.lineno
+            found.setdefault(node.name, []).append((node.lineno, start, end))
+    memo[path] = found
+    return found
+
+
+def bare_symbol_name(identifier: str) -> str:
+    """The declaration name inside a graphifyy label (`run()` -> `run`)."""
+    return identifier.split("(", 1)[0].strip().rsplit(".", 1)[-1]
+
+
+def declaration_line(repo_path: Path, path: str, line: int, identifier: str,
+                     counters: dict, cache: dict) -> int:
+    """The line that DECLARES `identifier` in a Python file, or -1 for the sidecar.
+
+    A citation of a symbol is a claim about where that symbol is defined, and searching
+    for the name cannot establish it: on the sample-monorepo conversion the token scan
+    below moved `load_campaign_template`, correctly cited by the engine at its own `def`
+    line, ten lines forward into the docstring of the NEXT function, because a
+    word-boundary search for `campaign` does not match inside `load_campaign_template`.
+    Of 2,069 handler rows only 728 cited the declaration; 45 landed outside the named
+    symbol entirely and 16 path:line locations were each published as the definition of
+    two different symbols. Every one carried VERIFIED, because the T3 gate only asks for
+    token overlap on the cited line and a neighbouring function's docstring supplies it.
+    ast settles the question instead — and it also RECOVERS the 2,339 records the same
+    word-boundary miss had quarantined despite the engine citing them correctly.
+
+    Ambiguity is resolved toward the engine rather than by position in the file: the
+    candidate whose span CONTAINS the engine's line wins (same-named methods on different
+    classes, overloads), then the nearest declaration. A genuine tie is quarantined —
+    picking one arbitrarily is what published the same location as two definitions.
+
+    Returns the engine's line unjudged only when the file could not be read, matching
+    snap_line_to_identifier: the adapter rules on content it actually read, and absence
+    is the gate's jurisdiction.
+    """
+    lines = file_lines(repo_path, path, cache)
+    if lines is False:
+        return line
+    if not lines:
+        counters["unverifiable_file_to_sidecar"] = \
+            counters.get("unverifiable_file_to_sidecar", 0) + 1
+        return -1
+    declarations = python_declarations(repo_path, path, cache)
+    if declarations is None:
+        counters["declaration_unparsed_to_sidecar"] = \
+            counters.get("declaration_unparsed_to_sidecar", 0) + 1
+        return -1
+    candidates = declarations.get(bare_symbol_name(identifier)) or []
+    if not candidates:
+        counters["declaration_absent_to_sidecar"] = \
+            counters.get("declaration_absent_to_sidecar", 0) + 1
+        return -1
+    containing = [c for c in candidates if c[1] <= line <= c[2]]
+    pool = containing or candidates
+    closest = min(abs(decl - line) for decl, _start, _end in pool)
+    winners = {decl for decl, _start, _end in pool if abs(decl - line) == closest}
+    if len(winners) > 1:
+        counters["declaration_ambiguous_to_sidecar"] = \
+            counters.get("declaration_ambiguous_to_sidecar", 0) + 1
+        return -1
+    resolved = winners.pop()
+    # ast counts lines the way Python's tokenizer does; the gate counts them with
+    # str.splitlines(), which also breaks on form feeds and U+2028. Where the two
+    # disagree the gate would score a line this function never chose, so the record is
+    # quarantined instead of published as VERIFIED.
+    if resolved > len(lines) or not (gate_stems(identifier) & gate_stems(lines[resolved - 1])):
+        counters["declaration_unverifiable_to_sidecar"] = \
+            counters.get("declaration_unverifiable_to_sidecar", 0) + 1
+        return -1
+    if resolved != line:
+        counters["declaration_line_corrected"] = \
+            counters.get("declaration_line_corrected", 0) + 1
+    return resolved
+
+
 def snap_line_to_identifier(repo_path: Path, path: str, line: int, identifier: str,
-                            counters: dict, cache: dict) -> int:
+                            counters: dict, cache: dict, declares: bool) -> int:
     """Align the engine's citation with the framework's exact-line overlap contract.
 
     graphifyy cites a declaration's START line, which for annotated Java/Kotlin
@@ -539,6 +756,13 @@ def snap_line_to_identifier(repo_path: Path, path: str, line: int, identifier: s
     engine cites the header's first line; scanning backward risks landing on an
     unrelated earlier mention.
 
+    This search is the FALLBACK, reached where no parser here can settle the
+    declaration: another language, or a Python node the engine did not flag as a
+    `def`/`class` (a module-level constant, which `ast`'s declaration walk does
+    not collect). A name found on a line is evidence the line mentions the symbol,
+    never evidence it declares it, so where a real parse is available (`declares`
+    and a Python file) declaration_line decides instead.
+
     Returns the (possibly snapped) line, or -1 when the identifier cannot be
     located within the window — the caller routes that record to the
     needs-verification sidecar: a symbol whose name cannot be found at or near
@@ -551,7 +775,7 @@ def snap_line_to_identifier(repo_path: Path, path: str, line: int, identifier: s
     unjudged: the adapter only rules on content it actually read — absence is the
     gate's jurisdiction, not this function's.
 
-    Punctuated engine labels (`billing-ws-pom`, `.Builder()`) are judged by
+    Punctuated engine labels (`sample-legacy-pom`, `.Builder()`) are judged by
     their LONGEST gate-surviving word — the first version exempted them entirely,
     which leaked exactly the unverifiable synthesized file-node labels back into
     the index (measured: the last 40 gate failures were all this class). An
@@ -563,15 +787,10 @@ def snap_line_to_identifier(repo_path: Path, path: str, line: int, identifier: s
         counters["gate_unverifiable_identifier"] = \
             counters.get("gate_unverifiable_identifier", 0) + 1
         return -1
+    if declares and path.endswith(".py"):
+        return declaration_line(repo_path, path, line, identifier, counters, cache)
     token = max(tokens, key=len)
-    lines = cache.get(path)
-    if lines is None:
-        try:
-            lines = (repo_path / path).read_text(encoding="utf-8",
-                                                 errors="replace").splitlines()
-        except OSError:
-            lines = False  # sentinel: unreadable, distinct from read-but-empty
-        cache[path] = lines
+    lines = file_lines(repo_path, path, cache)
     if lines is False or line < 1:
         return line
     if not lines:
@@ -657,8 +876,21 @@ def map_nodes(nodes: list, repo_path: Path, engine: str, counters: dict) -> tupl
             # an empty identifier is exactly what that guard exists to keep out.
             counters["nodes_missing_fields"] += 1
             continue
+        declares = is_declaration(node)
+        if not declares and names_its_own_file(path, identifier):
+            # Not a symbol, so neither citation rule applies and the sidecar is the wrong
+            # home too: no human review can turn "this file is named s3_async.py" into a
+            # declaration citation. Dropped and counted, like the rationale/document nodes
+            # and the non-dependency edges. Sending it through the token scan instead is
+            # what published services/nexus/nexus/s3/s3_async.py:10 as the definition of
+            # BOTH the module `s3_async.py` and the handler `_upload_file_async()` — the
+            # scan searched line 1 onward for `async`, the only word of the FILENAME long
+            # enough to survive the gate's tokenizer, and landed on the `async def` below.
+            counters["file_nodes_not_symbols"] = \
+                counters.get("file_nodes_not_symbols", 0) + 1
+            continue
         snapped = snap_line_to_identifier(repo_path, path, line, identifier,
-                                          counters, snap_cache)
+                                          counters, snap_cache, declares)
         if snapped == -1:
             # Identifier not locatable at/near its citation: quarantine with the
             # engine's original line so a human can judge it — never the index.
@@ -891,6 +1123,37 @@ def ensure_output_ignored(out_dir: Path) -> None:
             f"is NOT git-ignored; do not commit it")
 
 
+NO_EDGES_MARKER = "GRAPHIFY_NO_EDGES"
+
+
+def write_no_edges_marker(repo_path: Path, engine: str,
+                          edges_in: int, edges_out: int) -> None:
+    """State a zero-edge outcome; remove the marker when there ARE edges.
+
+    Both directions matter. Writing it is what keeps Step 15.8's either-contract
+    satisfiable after a clean run that found nothing; REMOVING it on a later run
+    that does find edges is what stops a stale marker from asserting "no edges"
+    over a CODE_GRAPH.jsonl sitting right there. Same reasoning as the success
+    path's `rm -f GRAPHIFY_BOOTSTRAP.err`.
+    """
+    marker = repo_path / "Generated" / "Analysis" / NO_EDGES_MARKER
+    try:
+        if edges_out:
+            if marker.is_file():
+                marker.unlink()
+            return
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            "GRAPHIFY_NO_EDGES engine=%s\n"
+            "The engine ran cleanly and resolved no dependency edges "
+            "(%d raw edge record(s) in, %d publishable after citation resolution).\n"
+            "This is a successful conversion without a dependency graph, not a failure: "
+            "readiness_report.py scores the same absence as N/A.\n" % (engine, edges_in, edges_out)
+        )
+    except OSError as exc:
+        log(f"WARNING: could not write {marker} ({exc}) — zero-edge outcome NOT recorded")
+
+
 def write_jsonl(path: Path, records: List[dict], description: str) -> None:
     """Write records as JSON-lines, or leave no file at all when there are none.
 
@@ -941,9 +1204,10 @@ def main() -> int:
     else:
         # The engine needs Python >= 3.10. Check the interpreter that will actually RUN it
         # (GRAPHIFY_PYTHON, else a probed 3.10+ interpreter, else ours) — NOT this one.
-        # Phase 1.5 invokes the adapter as bare `python3`, which is 3.9.6 on a stock macOS
-        # box, so checking sys.version_info here made the feature unreachable through the
-        # only path that invokes it.
+        # Phase 1.5 now arrives here already on a 3.10+ interpreter (ensure_graphify.sh
+        # resolves one), but the adapter is still documented as runnable under bare
+        # `python3` — 3.9.6 on a stock macOS box — and checking sys.version_info here
+        # would make the feature unreachable that way.
         interpreter = engine_python()
         interpreter_version = python_version_of(interpreter)
         running = f"{sys.version_info[0]}.{sys.version_info[1]}"
@@ -1051,6 +1315,11 @@ def main() -> int:
     if counters["vendor_excluded"]:
         log(f"vendor_excluded={counters['vendor_excluded']} record(s) from vendored/"
             f"generated/minified paths filtered before emission (not the team's code)")
+    if counters.get("file_nodes_not_symbols"):
+        log(f"file_nodes_not_symbols={counters['file_nodes_not_symbols']} node(s) whose "
+            f"label is only their own filename dropped — a file declares no symbol, so "
+            f"there is no line for the citation to mean, and the `path` column already "
+            f"carries the filename")
 
     # Symbol records go to stdout (Phase 1.5 merges them into Knowledge/CODE_INDEX.md,
     # which is eager-loaded at session start). Dependency edges do NOT: at real-repo
@@ -1073,6 +1342,12 @@ def main() -> int:
     write_jsonl(out_dir / CODE_GRAPH_NAME, edge_records,
                 f"dependency edges ({len(edge_records)}) — kept out of CODE_INDEX.md to "
                 f"protect the eager-load token budget")
+    # A clean run that resolved zero dependency edges leaves no CODE_GRAPH.jsonl
+    # (write_jsonl declines to write an empty file so "no records" can never be read
+    # as last run's file). Step 15.8's either-contract then saw no half present --
+    # the success path has already rm -f'd GRAPHIFY_BOOTSTRAP.err -- and aborted a
+    # conversion that in fact succeeded. State the outcome instead of being silent.
+    write_no_edges_marker(repo_path, engine, len(edges), len(edge_records))
 
     sidecar = node_sidecar + edge_sidecar
     write_jsonl(out_dir / SIDECAR_NAME, sidecar,
