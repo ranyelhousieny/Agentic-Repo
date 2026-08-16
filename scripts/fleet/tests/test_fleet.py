@@ -404,7 +404,7 @@ def test_cache_blind_columns_are_not_reported_as_absent(project):
     """`readiness` and `graph edges` come from artifacts the converter git-ignores in
     the target repo, so a default-branch replica structurally cannot carry them.
     Rendering them as `--` next to genuinely-absent artifacts read as "this repo has
-    none" -- and the Maestro lane makes cache the primary source, so that was most rows."""
+    none" -- and the pipeline lane makes cache the primary source, so that was most rows."""
     make_cache_member(project, "mini-c")
     assert run_script("build_fleet_registry.py", "--project-dir", str(project)).returncode == 0
     md = open(project / "Generated" / "FLEET_REGISTRY.md").read()

@@ -1,4 +1,4 @@
-# SDLC FEATURE AGENT -- `/start-sdlc-feature`, the Maestro lane
+# SDLC FEATURE AGENT -- `/start-sdlc-feature`, the pipeline lane
 
 **Source of truth for `/start-sdlc-feature`,** per `CLAUDE.md` Rule 7 -- edit the procedure HERE and
 nowhere else.
@@ -15,28 +15,28 @@ nowhere else.
 >    first.
 > 2. No `TODO` check in Step C -- a `BINDING.yml` whose `epic` is the literal `TODO` reaches
 >    `createJiraIssue` as `parent: TODO`.
-> 3. The false claim that `maestro_repo_preflight.py` ships into converted repos.
+> 3. The false claim that `sdlc_repo_preflight.py` ships into converted repos.
 > 4. A relative invocation of it that cannot resolve in a target repo.
 > 5. No `AMBIGUOUS` branch for the preflight's verdict.
 > **Until that file is replaced, read THIS file, not the `.claude` wrapper.**
 > It could not be hand-edited from Claude Code: `~/.claude/hooks/block_company_repo_edits.sh` refuses
-> edits under `.claude/` inside a the company GitLab repo, and the sanctioned routes are Maestro or a
+> edits under `.claude/` inside a company GitLab repo, and the sanctioned routes are the pipeline or a
 > `/start-feature` worktree carrying `.human-authored-lane`. The replacement content is the
 > `.windsurf` twin verbatim; the owed edits are listed in `Generated/PROGRESS_TRACKER.md`.
 
-**Role:** you hand one repo-scoped story to Maestro and stay with it until the MR merges.
+**Role:** you hand one repo-scoped story to the pipeline and stay with it until the MR merges.
 
-Creates a JIRA Story, hands it to **Maestro**, and watches it to completion. Maestro writes the
+Creates a JIRA Story, hands it to **the pipeline**, and watches it to completion. The pipeline writes the
 code, creates its own `pipeline/...` branch, and authors the MR -- so the MR counts as **`is_agentic`**.
 
 **Nothing is created on your disk.** No branch, no worktree, nothing to clean up afterwards.
 
 > **Companion lane:** the **human** lane is the same repo class and the same ticket discipline,
 > but _you_ write the code in a worktree and author the MR yourself. A hand-authored MR counts
-> as `is_ai_assisted`, not `is_agentic`. Use the Maestro lane unless Maestro genuinely cannot
+> as `is_ai_assisted`, not `is_agentic`. Use the pipeline lane unless the pipeline genuinely cannot
 > do the work.
 >
-> **Not for personal or GitHub repos.** Maestro only operates on the company GitLab.
+> **Not for personal or GitHub repos.** the pipeline only operates on the company GitLab.
 
 ---
 
@@ -45,13 +45,13 @@ code, creates its own `pipeline/...` branch, and authors the MR -- so the MR cou
 Once this command labels the ticket, **you do not touch git for that repo.** No `git commit`, no
 `git push`, no `glab mr create`, no `gh pr create` -- no matter how the request is phrased.
 
-"Put it in the MR" / "add it to the same MR" always means **the Maestro MR**. To get specific
-content in, add it to the ticket as a **spec comment**; Maestro ingests amendments mid-run in about
+"Put it in the MR" / "add it to the same MR" always means **the pipeline MR**. To get specific
+content in, add it to the ticket as a **spec comment**; the pipeline ingests amendments mid-run in about
 60 seconds.
 
 This rule exists because it was violated in practice (PROJ-2229 !4, PROJ-2368 !215). Teams can
 enforce it mechanically with a Claude Code pre-tool hook that blocks git-write commands while a
-Maestro ticket is open on the repo.
+The pipeline ticket is open on the repo.
 
 ## CARDINAL RULE -- the `agentic-sdlc` label is FOREVER
 
@@ -82,8 +82,8 @@ genuinely belongs elsewhere. Never leave a ticket without an epic parent -- it e
 ```yaml
 jira_cloud_id: "your-org.atlassian.net"
 jira_issue_type: "Story"
-agentic_sdlc_label: "agentic-sdlc" # the Maestro trigger
-maestro_service_account: "the-pipeline-service-account" # the ONLY author that yields is_agentic
+agentic_sdlc_label: "agentic-sdlc" # the pipeline trigger
+sdlc_service_account: "the-pipeline-service-account" # the ONLY author that yields is_agentic
 company_remote_marker: "your-org" # repo-class test
 transition_in_progress_id: "21"
 transition_done_id: "31"
@@ -178,7 +178,7 @@ git -C "$REPO" remote get-url origin
 ```
 
 - Contains `your-org` / `.your-org.io` -- **proceed.**
-- `github.com` -- **STOP.** Maestro does not operate there.
+- `github.com` -- **STOP.** the pipeline does not operate there.
 - No remote -- **STOP.** Nothing to open an MR against.
 
 ## Step 1: Repo preflight
@@ -187,8 +187,8 @@ The preflight script lives in the Agentic-Repos framework checkout, not in the t
 resolve `$FRAMEWORK_HOME` first (default `~/code/the company/agentic-repo`; `.` when you are already in it):
 
 ```bash
-FRAMEWORK_HOME=${FRAMEWORK_HOME:-$([ -f scripts/maestro_repo_preflight.py ] && echo . || echo ~/code/the company/agentic-repo)}
-python3 "$FRAMEWORK_HOME/scripts/maestro_repo_preflight.py" --repo "<repo name or full path>"
+FRAMEWORK_HOME=${FRAMEWORK_HOME:-$([ -f scripts/sdlc_repo_preflight.py ] && echo . || echo ~/code/the company/agentic-repo)}
+python3 "$FRAMEWORK_HOME/scripts/sdlc_repo_preflight.py" --repo "<repo name or full path>"
 ```
 
 **PASS** -- use the printed canonical full path in the ticket; never a bare name.
@@ -213,13 +213,13 @@ Only a genuine dead-repo result stops the handoff.
 
 Generate a summary (imperative, 80 chars or less) and a spec-quality description.
 
-**Write the spec so Maestro executes it well** -- this is the highest-leverage part of the command:
+**Write the spec so the pipeline executes it well** -- this is the highest-leverage part of the command:
 
 - **Acceptance criteria as runnable commands with expected output**, not intentions. An executable
   AC costs zero clarification rounds because the criterion _is_ the test.
 - **State the outcome, not the artifact.** "Port these scripts" gets you files that don't run;
   "`/foo` completes end to end, exit 0" gets you a working feature.
-- **Every path must resolve for Maestro.** It runs elsewhere -- local absolute paths and OneDrive
+- **Every path must resolve for the pipeline.** It runs elsewhere -- local absolute paths and OneDrive
   paths are dead to it. Reference `<group>/<repo>` + branch + repo-relative paths, and **inline any
   content it must reproduce verbatim.**
 - **Full spec at trigger beats mid-flight amendment.** Amendment works (~60s ingestion) but measured
@@ -263,7 +263,7 @@ curl -s -X POST -u "$E:$T" -H "Content-Type: application/json" \
 
 A ticket is born with **parent epic + SP + Development Classification + 1m worklog**. All four.
 
-## Step 4: Trigger Maestro
+## Step 4: Trigger the pipeline
 
 Transition to In Progress (`21`), then **append** the label -- read existing labels first, never
 overwrite:
@@ -274,15 +274,15 @@ curl -s -X PUT -u "$E:$T" -H "Content-Type: application/json" \
   "https://your-org.atlassian.net/rest/api/3/issue/KEY-XXXX"
 ```
 
-Maestro picks it up within seconds and posts a Rostrum URL on the ticket.
+The pipeline picks it up within seconds and posts a run URL on the ticket.
 
 ## Step 5: NO worktree, NO branch -- deliberately
 
-**Do not create either.** Maestro works on its own `pipeline/key-XXXX-...` branch, which is a
-sibling of anything you'd cut from `main` -- a local worktree could never show you Maestro's
+**Do not create either.** the pipeline works on its own `pipeline/key-XXXX-...` branch, which is a
+sibling of anything you'd cut from `main` -- a local worktree could never show you the pipeline's
 output, and stale worktrees accumulate because no MR ever matches the worktree's own branch.
 
-To inspect Maestro's work once the branch exists:
+To inspect the pipeline's work once the branch exists:
 
 ```bash
 git -C "$REPO" fetch origin
@@ -291,7 +291,7 @@ git -C "$REPO" diff main origin/pipeline/key-XXXX-<slug>
 
 ## Step 6: Monitor to terminal state
 
-Poll the ticket. Branch on Maestro's comments:
+Poll the ticket. Branch on the pipeline's comments:
 
 | Signal                          | Action                                                                                                     |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -300,7 +300,7 @@ Poll the ticket. Branch on Maestro's comments:
 | FAILED_STOP / NOT IMPLEMENTABLE | Post an acknowledgment. **Keep the label.** Stop.                                                          |
 | No-op                           | Same -- acknowledge, **keep the label**, close as delivered if the work already exists                     |
 | MR created                      | Move to MR watch (Step 7)                                                                                  |
-| Silent > 2h                     | Check the Rostrum run status before waiting longer -- a hung run needs a platform escalation, not patience |
+| Silent > 2h                     | Check the pipeline run status before waiting longer -- a hung run needs a platform escalation, not patience |
 
 Cadence: ~270s while a pipeline runs; 1200-1800s when waiting on a human.
 
@@ -308,25 +308,25 @@ Cadence: ~270s while a pipeline runs; 1200-1800s when waiting on a human.
 
 Watching for a terminal state is not enough. Both comment surfaces stay tracked until merge:
 
-**JIRA ticket comments (Maestro -> you):**
+**JIRA ticket comments (the pipeline -> you):**
 
-- A Maestro question / awaiting-human-answer state gets answered as a **spec comment** within the
+- A pipeline question / awaiting-human-answer state gets answered as a **spec comment** within the
   polling cadence. An unanswered question stalls the run silently.
 - A FAILED run gets a retry spec comment ("spec unchanged and still valid -- please retry the
   standard-feature-flow from the top") -- never a label cycle.
 
 **MR review threads (reviewers -> the branch):**
 
-- Poll unresolved discussions on the Maestro MR. mr-tracker, human reviewers, and Maestro's own
+- Poll unresolved discussions on the pipeline MR. Review bots, human reviewers, and the pipeline's own
   review node all comment here.
 - For EVERY unresolved thread: post the fix list as a **spec comment on the JIRA ticket** (exact
-  path:line corrections -- Maestro ingests in ~60s and amends its own MR), plus one short
+  path:line corrections -- the pipeline ingests in ~60s and amends its own MR), plus one short
   acknowledgment note on the MR so reviewers see it is queued.
 - **NEVER push fixes directly, even one-line corrections** -- the cardinal rule holds. Threads
   resolve -> approval fires -> an armed auto-merge completes.
 - If your team pre-authorized approve+automerge (standing grant), arm merge-when-pipeline-succeeds
   as soon as the MR opens -- **after reading the diff.** The repo's approval rules, a green
-  pipeline, and Rostrum HITL gates remain the surviving protections, and in a single-approver repo
+  pipeline, and pipeline HITL gates remain the surviving protections, and in a single-approver repo
   the auto-merge IS the merge, so the operator's own read is the only review the change gets. An
   approval attributed to a human who did not look at the diff is not one. A grant is bounded by
   whoever recorded it (scope, group, review date); a team that never recorded one does not have it.
@@ -335,7 +335,7 @@ Between sessions this duty belongs to the standing monitor (the scheduled wave-m
 an /agentic-sdlc-monitor sweep) -- closing a laptop must not orphan the loop.
 
 Proven live 2026-08-15: 13 evidence-cited review threads across 5 MRs answered this way in one
-pass; every fix routed through Maestro, zero hand-pushes.
+pass; every fix routed through the pipeline, zero hand-pushes.
 
 ## Step 7: On merge -- close the loop
 
@@ -350,7 +350,7 @@ When the MR merges:
 ```bash
 curl -s -X POST -u "$E:$T" -H "Content-Type: application/json" \
   -d '{"transition":{"id":"31"},"update":{"worklog":[{"add":{"timeSpent":"<SP>h",
-       "comment":"Closing worklog: SP x 1h. Maestro authored the MR; merged as <sha>."}}]}}' \
+       "comment":"Closing worklog: SP x 1h. The pipeline authored the MR; merged as <sha>."}}]}}' \
   "https://your-org.atlassian.net/rest/api/3/issue/KEY-XXXX/transitions"
 ```
 
@@ -375,17 +375,17 @@ SDLC feature complete
   Parent:    <binding.epic> - SP <n> - <binding.dev_classification> - <n>h logged
   MR:        !<iid> merged as <sha>   author: the-pipeline-service-account -> is_agentic
   Repo:      <full gitlab path>, main fast-forwarded
-  Worktree:  none created (Maestro lane)
+  Worktree:  none created (Pipeline lane)
 ```
 
 ---
 
 ## Error handling
 
-- **Non-the company remote** -- stop at Step 0; Maestro only operates on the company GitLab
+- **Non-the company remote** -- stop at Step 0; the pipeline only operates on the company GitLab
 - **Preflight FAIL** -- control-test first; a universal failure means the script's auth, not the repo
 - **Sprint assignment fails** -- continue; report "add to sprint manually"
-- **Maestro fails to produce an MR** -- that is a platform blocker for the Agentic SDLC platform
+- **the pipeline fails to produce an MR** -- that is a platform blocker for the Agentic SDLC platform
   team (the pipeline platform team). Escalate it. **Do not hand-author an MR as a workaround** --
   it masks the platform bug and does not count as agentic. If the work must land by hand, that is a
   deliberate switch to the human lane, and its metric cost should be stated out loud.

@@ -1,4 +1,4 @@
-"""Tests for scripts/maestro_repo_preflight.py -- the Maestro handoff guard.
+"""Tests for scripts/sdlc_repo_preflight.py -- the pipeline handoff guard.
 
 No network and no `glab` binary: `search` / `get_project` / `glab_api` are stubbed
 on the imported module. Every case here is a wrong-handoff shape the script exists
@@ -13,11 +13,11 @@ import os
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(os.path.dirname(HERE), "maestro_repo_preflight.py")
+SCRIPT = os.path.join(os.path.dirname(HERE), "sdlc_repo_preflight.py")
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("maestro_repo_preflight", SCRIPT)
+    spec = importlib.util.spec_from_file_location("sdlc_repo_preflight", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -112,7 +112,7 @@ def test_main_exits_2_on_ambiguity(pf, capsys):
     ]
     import sys
     argv = sys.argv
-    sys.argv = ["maestro_repo_preflight.py", "--repo", "svc"]
+    sys.argv = ["sdlc_repo_preflight.py", "--repo", "svc"]
     try:
         with pytest.raises(SystemExit) as e:
             pf.main()
@@ -127,7 +127,7 @@ def test_broken_auth_fails_loudly_and_does_not_call_the_repo_dead(pf, capsys):
     pf.glab_api = lambda path: None            # expired token: everything fails
     import sys
     argv = sys.argv
-    sys.argv = ["maestro_repo_preflight.py", "--repo", "svc"]
+    sys.argv = ["sdlc_repo_preflight.py", "--repo", "svc"]
     try:
         with pytest.raises(SystemExit) as e:
             pf.main()
@@ -143,7 +143,7 @@ def test_main_passes_on_a_clean_exact_resolution(pf, capsys):
     pf.search = lambda name: [proj("your-org/apps/TEAM-A/svc")]
     import sys
     argv = sys.argv
-    sys.argv = ["maestro_repo_preflight.py", "--repo", "svc"]
+    sys.argv = ["sdlc_repo_preflight.py", "--repo", "svc"]
     try:
         with pytest.raises(SystemExit) as e:
             pf.main()

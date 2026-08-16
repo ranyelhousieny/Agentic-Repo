@@ -33,7 +33,7 @@ Adopt the role and execute all phases defined there:
 - Phase 0: Preflight (glab auth gate — an expired token reads as an empty group; STOP loudly)
 - Phase 1: Discovery (`scripts/fleet/discover_members.py` → MEMBERS.yaml + Generated/DRIFT.md)
 - Phase 2: Policy gate — HUMAN promotes policies; never proceed on proposals
-- Phase 3: Member conversions — ALL through Maestro (`/start-sdlc-feature` ticket per member, no
+- Phase 3: Member conversions — ALL through the pipeline (`/start-sdlc-feature` ticket per member, no
   local cloning; ticket 0 = project layer immediately, closing ticket = aggregation refresh after
   the wave merges)
 - Phase 4: Aggregation (`build_fleet_registry.py`, `build_project_index.py`,
@@ -70,7 +70,7 @@ artifacts; none from memory.
 - Enforce the agent prompt's Hard Rules 1–5, especially: read-only against member repos,
   discovery proposes / a standing authorization promotes, and the router stays a router.
 - **Standing duty — track every fired ticket's comments AND its MR review threads until merge**
-  (agent prompt § Review-answer loop + /start-sdlc-feature Step 6.5): answer Maestro questions as
+  (agent prompt § Review-answer loop + /start-sdlc-feature Step 6.5): answer the pipeline questions as
   spec comments, route every review-thread fix through a spec comment on the ticket (never a
   direct push), retry failed runs by comment. Between sessions, hand the duty to the scheduled
   wave-monitor pipeline — a closed laptop must not orphan the loop.

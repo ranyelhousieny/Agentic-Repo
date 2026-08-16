@@ -849,7 +849,7 @@ fi
 
 **Step 6: Create OR update CLAUDE.md — ALWAYS add the Session-Init pointer**
 
-`CLAUDE.md` is the entry point the **Agentic SDLC / Maestro** honors when it clones the repo, so it MUST route to the knowledge layer. Handle BOTH cases — never skip the pointer:
+`CLAUDE.md` is the entry point the **Agentic SDLC / the pipeline** honors when it clones the repo, so it MUST route to the knowledge layer. Handle BOTH cases — never skip the pointer:
 
 - **No `$REPO_PATH/CLAUDE.md` yet:** create it (bullets below), with the Session-Init block as the first section after the title.
 - **`$REPO_PATH/CLAUDE.md` already exists:** do NOT overwrite it. INJECT the Session-Init block additively at the top (right after the intro paragraph), preserving ALL existing content. Skip injection only if an equivalent Session-Init block is already present.
@@ -857,9 +857,9 @@ fi
 **Session-Init block to insert (adapt `$REPO_NAME_LOWER`):**
 
 ```markdown
-## Session Initialization — READ FIRST (AI agents & the Agentic SDLC / Maestro)
+## Session Initialization — READ FIRST (AI agents & the Agentic SDLC / the pipeline)
 
-This repo has an agentic **knowledge layer**. Before acting on any task — including Agentic SDLC / Maestro pipeline runs — load context in this order, then proceed with that context:
+This repo has an agentic **knowledge layer**. Before acting on any task — including Agentic SDLC / the pipeline pipeline runs — load context in this order, then proceed with that context:
 
 1. `START_HERE.md` — orientation and entry point
 2. `Knowledge/KNOWLEDGE_GRAPH.md` — architecture, decisions, navigation (the "senior engineer" context: history + why, not just code)
@@ -1759,7 +1759,7 @@ Create `$REPO_PATH/BINDING.yml`:
 # BINDING.yml — the ONLY place this project's tracker configuration lives.
 # Read at run time by ticket-creating skills (e.g. /start-sdlc-feature).
 # Platform-wide values (Jira host, custom-field IDs, transition IDs, the agentic-sdlc
-# label, the Maestro service account) are NOT here — they are inherited from the framework.
+# label, the pipeline service account) are NOT here — they are inherited from the framework.
 
 jira_project: <TRACKER KEY> # e.g. CRM
 epic: <EPIC KEY> # the ACI-monitored epic tickets parent to; update each sprint
@@ -2258,7 +2258,7 @@ cat \
 
 ---
 
-## Pilot Question Answers (mr-tracker pilot — AC15)
+## Pilot Question Answers (the review bot pilot — AC15)
 
 These five questions must be answerable from the generated KB:
 

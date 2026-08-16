@@ -99,7 +99,7 @@ def dash(v):
 # exist only in a local clone and can never be read from a default-branch replica.
 # Rendering them as `--` alongside genuinely-absent artifacts told the reader
 # "this repo has none", when the truth is "this SOURCE cannot see it" -- and the
-# Maestro lane makes cache the primary source, so that was most rows.
+# Pipeline lane makes cache the primary source, so that was most rows.
 CACHE_BLIND = "n/a*"
 
 

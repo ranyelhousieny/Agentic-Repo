@@ -97,9 +97,9 @@ policies into `MEMBERS.yaml`, present the adopted table in the session report, a
 human rules. The human can override any row at any time and overrides win retroactively (an
 un-promoted member never gets another ticket; in-flight tickets are cancelled by comment).
 
-## Phase 3 — Member conversions (ALL through Maestro; decision locked 2026-08-15)
+## Phase 3 — Member conversions (ALL through the pipeline; decision locked 2026-08-15)
 
-**Conversions are Maestro work, not local work.** One `/start-sdlc-feature` ticket per member; the
+**Conversions are the pipeline work, not local work.** One `/start-sdlc-feature` ticket per member; the
 pipeline clones the member from its GitLab remote on its own infrastructure, runs the conversion,
 and authors the MR — `is_agentic`, human-reviewed, merged to the member's default branch. **Never
 clone members locally for conversion**; a local clone is an optional read cache for aggregation,
@@ -124,7 +124,7 @@ not a conversion prerequisite.
    `project_verify.py` — link it `blocked by` the wave tickets and trigger it when they merge.
    Between batches, interim refresh tickets are cheap and keep the registry honest.
 
-**Spec template — proven live by PROJ-2849 (2026-08-15, sample-observability). Maestro runs
+**Spec template — proven live by PROJ-2849 (2026-08-15, sample-observability). The pipeline runs
 elsewhere; every line of this is load-bearing:**
 
 ```text
@@ -177,7 +177,7 @@ expiry stops being a decision and becomes a default nobody remembers making.
 - Batches fire WITHOUT per-batch confirmation — keep the in-flight cap (~5), post progress reports
   instead of go/no-go asks, and dedup against existing open tickets before creating (JQL on
   summary + label) so re-runs are idempotent.
-- When Maestro opens an MR: **read the diff, then approve with the operator's credential and enable
+- When the pipeline opens an MR: **read the diff, then approve with the operator's credential and enable
   auto-merge** (merge-when-pipeline-succeeds). The metric is untouched — authorship stays
   `the-pipeline-service-account` → `is_agentic`. The reading is not optional: an approval attributed to a human
   who did not look at the diff is the thing the approval field is supposed to mean.
@@ -190,20 +190,20 @@ expiry stops being a decision and becomes a default nobody remembers making.
   guessing), and at fleet scale nobody notices for a sprint. Confirm the five values against the
   member's own team before approving.
 - **Surviving protections — never bypass them:** the repo's own approval rules (second human
-  approver / CODEOWNERS), a green pipeline, and Rostrum HITL gates. Never force-merge, never merge
+  approver / CODEOWNERS), a green pipeline, and pipeline HITL gates. Never force-merge, never merge
   a red pipeline, never edit approval rules to lower the bar. If a repo requires no second
   approver, the auto-merge IS the merge — so in that repo the operator's own read is the ONLY
   review the change gets, and the two rules above are what make it a real one.
-- **Review-answer loop (standing duty, Rany 2026-08-15):** poll open Maestro MRs for unresolved
+- **Review-answer loop (standing duty, Rany 2026-08-15):** poll open the pipeline MRs for unresolved
   review threads. For each: post the fix list as a SPEC COMMENT on the JIRA ticket (exact
-  path:line corrections; Maestro ingests in ~60s and amends its own MR) and one acknowledgment
+  path:line corrections; the pipeline ingests in ~60s and amends its own MR) and one acknowledgment
   comment on the MR. NEVER push fixes directly — the cardinal rule holds even for one-line
   citation corrections. Threads resolve → approval fires → armed auto-merge completes.
 
 ## Phase 4 — Aggregation (the project knowledge)
 
 ```bash
-# 0. Remote read cache FIRST -- the Maestro lane converts members without ever cloning them,
+# 0. Remote read cache FIRST -- the pipeline lane converts members without ever cloning them,
 #    so without this every uncloned member measures as an all-`--` row. SHA-gated: a member
 #    whose head has not moved is skipped, so re-running is cheap.
 python3 "$FRAMEWORK_HOME/scripts/fleet/fetch_member_artifacts.py" --project-dir "$PROJECT_DIR"
@@ -264,16 +264,16 @@ This is what the project layer is FOR. When the user brings a feature that spans
 1. **Locate.** Load `PROJECT_INDEX.md` + `Generated/CROSS_REPO_GRAPH.jsonl`. Identify touched
    members: the index descriptions say what each member is; the graph says who depends on whom.
    Open the touched members' own `Knowledge/CODE_INDEX.md` in scoped subagents for file:line
-   grounding. Every path that goes into a ticket must resolve for Maestro: `<group>/<repo>` +
+   grounding. Every path that goes into a ticket must resolve for the pipeline: `<group>/<repo>` +
    branch + repo-relative path — never a local absolute path.
-2. **Decompose. One ticket = one repo.** Maestro operates per-repo; a ticket spanning two repos
+2. **Decompose. One ticket = one repo.** the pipeline operates per-repo; a ticket spanning two repos
    cannot merge. Split the feature into per-member stories along the graph's edges. Never split
    one FILE's work across two concurrent tickets (competing-branch rule from
    `/start-sdlc-feature`).
 3. **Sequence by the graph.** Providers before consumers: the member that publishes the contract
    (API, SDK, schema) ships first; dependents' tickets reference the merged contract. IaC tickets
    last, referencing the service change. When a consumer ticket must start before the provider MR
-   merges, inline the agreed contract verbatim in BOTH tickets — Maestro cannot read an unmerged
+   merges, inline the agreed contract verbatim in BOTH tickets — the pipeline cannot read an unmerged
    sibling branch.
 4. **Cut tickets with `/start-sdlc-feature --repo <member> <story>`.** Each ticket uses the
    TARGET member's own `BINDING.yml` (its project/epic/board) — the project-level binding is for
@@ -281,7 +281,7 @@ This is what the project layer is FOR. When the user brings a feature that spans
    CODE_INDEX; link the tickets (blocks/relates) and, when the feature warrants it, a feature
    epic via `--epic`.
 5. **Hands off git — entirely.** Both cardinal rules of `/start-sdlc-feature` apply to every
-   ticket cut here: never touch git on a member repo while its Maestro ticket is open, and the
+   ticket cut here: never touch git on a member repo while its the pipeline ticket is open, and the
    `agentic-sdlc` label is forever. Amendments go as ticket spec comments.
 6. **Track.** After merges land, member KBs go STALE in the registry (their git moved past their
    KG date). Close the loop: `update-only` re-run on touched members, then re-run Phase 4

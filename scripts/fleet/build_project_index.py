@@ -31,7 +31,7 @@ DESC_CAP = 140
 # Same distinction the registry makes: `--` = the member has no readiness report,
 # `n/a*` = THIS SOURCE cannot see one. Generated/READINESS_REPORT.md is git-ignored
 # by the converter, so it exists only in a local clone and never on the default
-# branch a cache row replicates -- and the Maestro lane makes cache the primary
+# branch a cache row replicates -- and the pipeline lane makes cache the primary
 # source, so printing `--` there mislabels most rows under a legend that promises
 # "achieved readiness level from the member's own report".
 CACHE_BLIND = "n/a*"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fetch_member_artifacts.py -- remote read cache for members with no local clone.
 
-The Maestro lane means members get converted on GitLab without ever being cloned
+The pipeline lane means members get converted on GitLab without ever being cloned
 to this machine (decision 2026-08-15: conversions always through the pipeline,
 no local cloning). Aggregation still has to MEASURE those members, so this
 script fetches a fixed, small artifact set from each member's default branch

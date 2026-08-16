@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-Maestro repo PREFLIGHT -- resolve a target repo to its LIVE full GitLab path, and
-REFUSE a Maestro handoff when the resolved project is stale/dead.
+The pipeline repo PREFLIGHT -- resolve a target repo to its LIVE full GitLab path, and
+REFUSE a pipeline handoff when the resolved project is stale/dead.
 
 Lives in the Agentic-Repos framework checkout (your-org/agentic-repo)
 and is invoked from there, like every other script in scripts/: callers resolve
-$FRAMEWORK_HOME and run "$FRAMEWORK_HOME/scripts/maestro_repo_preflight.py".
+$FRAMEWORK_HOME and run "$FRAMEWORK_HOME/scripts/sdlc_repo_preflight.py".
 It is NOT copied into converted repos -- the conversion template never emitted it, so
 the old "converted repos receive a copy" note sent /start-sdlc-feature Step 1 at a
 relative path that does not exist in a target repo.
 Used by the /start-sdlc-feature command (Step 1).
 
-Why this exists (2026-07-20): a meeting-doc reroute (PROJ-2340) failed because Maestro
+Why this exists (2026-07-20): a meeting-doc reroute (PROJ-2340) failed because the pipeline
 resolved the bare name "team_group" to the DELETION-SCHEDULED, empty placeholder
 `your-org/apps/team-group/sample-service_fabric-deletion_scheduled-83695743` instead
 of the live `your-org/apps/TEAM-A/team_group`. The repo was migrated
-team-group -> TEAM-A group; the old empty shell still resolves by name and traps Maestro.
+team-group -> TEAM-A group; the old empty shell still resolves by name and traps the pipeline.
 
 This guard makes a wrong-repo handoff structurally impossible from the caller's side:
-- Always resolve to a FULL path (never hand Maestro a bare name).
+- Always resolve to a FULL path (never hand the pipeline a bare name).
 - Rank an EXACT name match above group preference. `?search=` is a substring match,
   so `--repo foo-service` also returns `foo-service-iac`; group-first ranking used to
   return the `-iac` sibling and print PASS on it.
@@ -28,15 +28,15 @@ This guard makes a wrong-repo handoff structurally impossible from the caller's 
   migrated-away group; suggest the live replacement.
 
 Usage:
-  python3 scripts/maestro_repo_preflight.py --repo team_group
-  python3 scripts/maestro_repo_preflight.py --repo your-org/apps/TEAM-A/team_group
+  python3 scripts/sdlc_repo_preflight.py --repo team_group
+  python3 scripts/sdlc_repo_preflight.py --repo your-org/apps/TEAM-A/team_group
 Exit 0 = PASS (prints canonical full path + default branch). Exit 2 = FAIL (prints reason).
 
 Auth: uses `glab api` (must be authenticated: `glab auth status`). An expired glab
 token makes every lookup FAIL identically to a missing project, so the FIRST thing
 this script does is `glab api user`; a broken token exits 2 saying so in as many
 words, instead of leaving the caller to run the control test by hand.
-Tests: scripts/tests/test_maestro_repo_preflight.py (stubbed API, no network).
+Tests: scripts/tests/test_sdlc_repo_preflight.py (stubbed API, no network).
 """
 import sys, json, subprocess, argparse, urllib.parse
 
@@ -79,7 +79,7 @@ def search(name):
 
 
 def liveness(proj):
-    """(ok, reason). ok=True means safe to hand to Maestro."""
+    """(ok, reason). ok=True means safe to hand to the pipeline."""
     p = proj.get("path_with_namespace", "") or ""
     nm = proj.get("name", "") or ""
     if "deletion_scheduled" in p or "deletion_scheduled" in nm:
@@ -121,7 +121,7 @@ def ambiguous(live, name):
 
     Two live repos whose last segment is literally the requested name differ only
     by group; picking one by group preference is a guess, and a guess here hands
-    Maestro somebody else's repo.
+    the pipeline somebody else's repo.
     """
     base = name.split("/")[-1]
     exact = [c for c in live if c.get("path_with_namespace", "").split("/")[-1] == base]
@@ -184,7 +184,7 @@ def main():
         if alt:
             print("  USE INSTEAD: %s (branch %s, id %s)"
                   % (alt["path_with_namespace"], alt.get("default_branch"), alt.get("id")))
-        print("  Do NOT hand this ticket to Maestro until the target is the live full path above.")
+        print("  Do NOT hand this ticket to the pipeline until the target is the live full path above.")
         sys.exit(2)
 
     if alts:
@@ -193,7 +193,7 @@ def main():
             print("  - %s (branch %s, id %s)"
                   % (c["path_with_namespace"], c.get("default_branch"), c.get("id")))
         print("  Re-run with the full path. Picking one by group preference would be a guess,")
-        print("  and a guess here hands Maestro another team's repo.")
+        print("  and a guess here hands the pipeline another team's repo.")
         sys.exit(2)
 
     print("PASS: %s (branch %s, id %s)"

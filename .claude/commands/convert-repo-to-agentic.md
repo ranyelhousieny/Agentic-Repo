@@ -69,7 +69,7 @@ Reads the full agent definition and executes it:
 ## What Gets Created
 
 Inside the target repo:
-- `CLAUDE.md` - AI rules tailored to the detected tech stack. If a `CLAUDE.md` already exists, it is **not overwritten** — a **Session-Init pointer block** (routing to START_HERE → Knowledge Graph → Source of Truth → domain-agent skill → Progress Tracker) is injected additively at the top so the Agentic SDLC / Maestro honors the knowledge layer.
+- `CLAUDE.md` - AI rules tailored to the detected tech stack. If a `CLAUDE.md` already exists, it is **not overwritten** — a **Session-Init pointer block** (routing to START_HERE → Knowledge Graph → Source of Truth → domain-agent skill → Progress Tracker) is injected additively at the top so the Agentic SDLC / the pipeline honors the knowledge layer.
 - `AGENTS.md` - Claude Code workspace instructions
 - `START_HERE.md` - Project entry point with repo-specific content
 - `BINDING.yml` - Project tracker binding (jira project, epic, board) read by ticket-creating skills. Values are derived from evidence where possible and left as `TODO:` placeholders otherwise — never guessed.

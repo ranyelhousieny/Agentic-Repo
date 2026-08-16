@@ -5,7 +5,7 @@ Python 3.9+". Until this file existed that was a claim with nothing behind it:
 the sweeps in `scripts/onboarding/tests/test_min_interpreter_smoke.py` are scoped
 to `scripts/onboarding/`, and `scripts/eval/tests/lint_interpreter_floor.py` is
 scoped to `scripts/eval/` -- so `scripts/fleet/` and the ticket-lane preflight at
-`scripts/maestro_repo_preflight.py` sat outside both.
+`scripts/sdlc_repo_preflight.py` sat outside both.
 
 Two guards, deliberately different:
 
@@ -31,7 +31,7 @@ SCRIPTS = os.path.dirname(FLEET)                    # scripts/
 
 TARGETS = sorted(
     [os.path.join(FLEET, f) for f in os.listdir(FLEET) if f.endswith(".py")]
-    + [os.path.join(SCRIPTS, "maestro_repo_preflight.py")]
+    + [os.path.join(SCRIPTS, "sdlc_repo_preflight.py")]
 )
 
 PYTHON39 = shutil.which("python3.9") or (
@@ -50,7 +50,7 @@ def _is_39(interp):
 def test_targets_are_discovered():
     """A glob that silently matches nothing turns every assertion below vacuous."""
     assert len(TARGETS) >= 8, TARGETS
-    assert any(t.endswith("maestro_repo_preflight.py") for t in TARGETS)
+    assert any(t.endswith("sdlc_repo_preflight.py") for t in TARGETS)
     assert any(t.endswith("fleetlib.py") for t in TARGETS)
 
 

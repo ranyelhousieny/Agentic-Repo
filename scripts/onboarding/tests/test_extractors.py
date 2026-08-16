@@ -1056,8 +1056,8 @@ def test_merge_sme_committer_names_with_special_chars(tmp_path: Path) -> None:
 
 @pytest.fixture()
 def express_repo_no_src(tmp_path: Path) -> Path:
-    """Express repo with TypeScript files at root — no src/ dir (mr-tracker shape)."""
-    (tmp_path / "package.json").write_text('{"name":"mr-tracker","version":"1.0.0"}')
+    """Express repo with TypeScript files at root — no src/ dir (root-level TS shape)."""
+    (tmp_path / "package.json").write_text('{"name":"ts-root-svc","version":"1.0.0"}')
     (tmp_path / "app.ts").write_text(textwrap.dedent("""\
         import express from 'express';
         const app = express();

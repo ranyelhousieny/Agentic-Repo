@@ -43,7 +43,7 @@ prompts/templates/AI Agents/PROJECT_ONBOARDING_AGENT.md
    - Phase 0 preflight (glab auth gate — STOP loudly on failure)
    - Phase 1 discovery (read-only; MEMBERS.yaml + DRIFT.md)
    - Phase 2 policy gate (HUMAN promotes; hard stop on proposals)
-   - Phase 3 member conversions — ALL through Maestro (/start-sdlc-feature per member, no local
+   - Phase 3 member conversions — ALL through the pipeline (/start-sdlc-feature per member, no local
      cloning; project ticket 0 immediately, closing aggregation ticket after the wave)
    - Phase 4 aggregation (remote-cache fetch for uncloned members, then fleet registry, project
      index, cross-repo graph)
@@ -57,7 +57,7 @@ prompts/templates/AI Agents/PROJECT_ONBOARDING_AGENT.md
    copying this workflow does NOT inherit the grant; it records its own or runs with per-MR
    human approval.
 6. **Standing duty — track every fired ticket's comments AND its MR review threads until merge**
-   (agent prompt § Review-answer loop + /start-sdlc-feature Step 6.5): answer Maestro questions as
+   (agent prompt § Review-answer loop + /start-sdlc-feature Step 6.5): answer the pipeline questions as
    spec comments, route every review-thread fix through a spec comment on the ticket (never a
    direct push), retry failed runs by comment. Between sessions, hand the duty to the scheduled
    wave-monitor pipeline — a closed laptop must not orphan the loop.
