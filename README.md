@@ -59,4 +59,4 @@ This framework was extracted from a production setup -- a large-scale API gatewa
 
 ## Author
 
-Rany Elhousieny - [GitHub](https://github.com/rany-ai)
+Rany ElHousieny - [GitHub](https://github.com/rany-ai) - co-author, with Eslam Kamal, of [Data Strategy for LLMs](https://www.amazon.com/dp/B0H9XGSD98) (Packt, 2026), whose Chapter 11 builds on this framework
