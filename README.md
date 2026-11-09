@@ -59,4 +59,4 @@ This framework was extracted from a production setup -- a large-scale API gatewa
 
 ## Author
 
-Rany ElHousieny - [GitHub](https://github.com/rany-ai) - co-author, with Eslam Kamal, of [Data Strategy for LLMs](https://www.amazon.com/dp/B0H9XGSD98) (Packt, 2026), whose Chapter 11 builds on this framework
+Rany ElHousieny - [GitHub](https://github.com/rany-ai) - co-author, with Eslam Kamal, of [Data Strategy for LLMs](https://www.amazon.com/Data-Strategy-LLMs-applications-fine-tuning/dp/1806116995/ref=tmm_pap_swatch_0?link_from_packtlink=yes&th=1) (Packt, 2026), whose Chapter 11 builds on this framework
